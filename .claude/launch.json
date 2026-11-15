@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kostka-web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/build.mjs", "--serve"],
+      "port": 8765
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "name": "kostka",
+  "private": true,
+  "type": "module",
+  "description": "A small OLAP engine for learning: SQL over Parquet files, run on a simulated cluster in the browser",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "build": "node tools/build.mjs",
+    "dev": "node tools/build.mjs --serve",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "6.20.4",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/lang-sql": "6.10.0",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/lint": "6.9.7",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
+    "@sqlite.org/sqlite-wasm": "3.54.1-build1",
+    "hyparquet": "1.32.0",
+    "hyparquet-writer": "0.18.0",
+    "preact": "11.2.0",
+    "@lezer/highlight": "1.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

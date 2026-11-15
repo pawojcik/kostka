@@ -1,0 +1,1284 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Spark and Trino job lab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* Layout: control bar pinned on top; the cluster (stage DAG, driver, executors) on the left, the step's story on the right; the slot timeline full width below. */
+:root {
+  --bg: #f3f4f6; --panel: #ffffff; --sunk: #eef0f3; --ink: #151a23; --muted: #5a6372; --line: #d9dde4;
+  --accent: #c9531a; --accent-bg: #fbe9df;
+  --bad: #c42b2b; --bad-bg: #fbe4e4; --good: #2a7a4b; --good-bg: #e0f2e7;
+  --s0: #12806f; --s0-bg: #dcf1ec; --s1: #6548c0; --s1-bg: #ebe6fa; --s2: #b5730c; --s2-bg: #f8edd6;
+  --s3: #bd3d66; --s3-bg: #f9e3ea; --s4: #2c69b0; --s4-bg: #e1ecf8;
+  --on-solid: #ffffff;
+  --font-display: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11151b; --panel: #191e26; --sunk: #222833; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2e3542;
+    --accent: #f08a52; --accent-bg: #3a2418; --bad: #f07070; --bad-bg: #3b1d1f; --good: #6fcf94; --good-bg: #17301f;
+    --s0: #4cc6b2; --s0-bg: #15302b; --s1: #a891f0; --s1-bg: #262040; --s2: #e9b04f; --s2-bg: #33280f;
+    --s3: #ef80a3; --s3-bg: #3a1c27; --s4: #73a9ea; --s4-bg: #172a40; --on-solid: #11151b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11151b; --panel: #191e26; --sunk: #222833; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2e3542;
+  --accent: #f08a52; --accent-bg: #3a2418; --bad: #f07070; --bad-bg: #3b1d1f; --good: #6fcf94; --good-bg: #17301f;
+  --s0: #4cc6b2; --s0-bg: #15302b; --s1: #a891f0; --s1-bg: #262040; --s2: #e9b04f; --s2-bg: #33280f;
+  --s3: #ef80a3; --s3-bg: #3a1c27; --s4: #73a9ea; --s4-bg: #172a40; --on-solid: #11151b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 56px; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+main { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; line-height: 1.2; text-wrap: balance; }
+h1 { font-size: 32px; font-weight: 600; }
+h2 { font-size: 17px; font-weight: 600; }
+h3 { font-size: 14px; font-weight: 600; }
+p { margin: 0; }
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.eyebrow { font: 500 11.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.intro { display: flex; flex-direction: column; gap: 8px; max-width: 72ch; }
+.lede { color: var(--muted); font-size: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.panel-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.panel-h .faint { font-size: 12.5px; }
+.faint { color: var(--muted); }
+
+/* scenarios */
+.scen-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+.scen-btn { text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.scen-btn:hover { border-color: var(--muted); }
+.scen-btn b { font: 600 14px var(--font-display); }
+.scen-btn span { font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+.scen-btn[aria-selected="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.scen-detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.scen-detail pre { margin: 0; background: var(--sunk); border-radius: 8px; padding: 10px 12px; font: 12.5px/1.5 var(--font-mono); overflow-x: auto; white-space: pre; }
+.opts { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.opt { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; cursor: pointer; }
+.opt input { accent-color: var(--accent); width: 16px; height: 16px; }
+
+/* control bar */
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; box-shadow: 0 4px 14px -10px rgba(0,0,0,.35); }
+.btn { border: 1px solid var(--line); background: var(--sunk); border-radius: 7px; padding: 5px 12px; cursor: pointer; font-size: 13.5px; font-weight: 500; white-space: nowrap; }
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-solid); }
+.bar input[type=range] { flex: 1 1 160px; min-width: 120px; accent-color: var(--accent); }
+.where { font: 500 12.5px var(--font-mono); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.where b { color: var(--ink); font-weight: 500; }
+
+/* main grid */
+.grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(300px, 1fr); gap: 18px; align-items: start; }
+.left { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+
+/* stage DAG */
+.dag { display: grid; grid-template-columns: minmax(0, 1fr) 54px minmax(0, 1fr) 54px minmax(0, 1fr); align-items: center; }
+.dag .col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.link { text-align: center; font: 11px var(--font-mono); color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.link .ar { font-size: 18px; color: var(--accent); line-height: 1; }
+.stage { border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; display: flex; flex-direction: column; gap: 7px; background: var(--panel); min-width: 0; }
+.stage .top { display: flex; flex-direction: column; gap: 1px; }
+.stage .nm { display: flex; gap: 6px; align-items: baseline; }
+.stage .nm b { font: 600 14px var(--font-display); color: var(--c); }
+.stage .nm span { font-size: 12.5px; min-width: 0; }
+.chip { display: inline-block; align-self: flex-start; font: 500 10.5px var(--font-mono); letter-spacing: .03em; text-transform: uppercase; border-radius: 4px; padding: 1px 6px; background: var(--sunk); color: var(--muted); }
+.chip.running { background: var(--accent-bg); color: var(--accent); }
+.chip.complete { background: var(--good-bg); color: var(--good); }
+.chip.bad { background: var(--bad-bg); color: var(--bad); }
+.stage.running { border-color: var(--c); }
+.stage.idle .parts { opacity: .55; }
+.parts { display: flex; flex-wrap: wrap; gap: 4px; }
+.cell { width: 38px; height: 34px; border-radius: 5px; border: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font: 500 10.5px/1.15 var(--font-mono); color: var(--muted); background: var(--panel); }
+.cell i { font-style: normal; font-size: 9.5px; opacity: .85; }
+.cell.queued { border-style: dashed; border-color: var(--c); color: var(--c); }
+.cell.run { background: var(--cbg); border-color: var(--c); color: var(--c); }
+.cell.run2 { background: repeating-linear-gradient(135deg, var(--cbg) 0 5px, transparent 5px 9px); border-color: var(--c); color: var(--c); }
+.cell.done { background: var(--c); border-color: var(--c); color: var(--on-solid); }
+.cell.ess { background: var(--c); border: 2px dashed var(--on-solid); outline: 1px solid var(--c); color: var(--on-solid); }
+.cell.lost { border: 1.5px solid var(--bad); color: var(--bad); background: var(--bad-bg); }
+.cell.cur { box-shadow: 0 0 0 2px var(--accent); }
+.stage-sub { font-size: 11.5px; color: var(--muted); font-family: var(--font-mono); }
+.S0 { --c: var(--s0); --cbg: var(--s0-bg); } .S1 { --c: var(--s1); --cbg: var(--s1-bg); } .S2 { --c: var(--s2); --cbg: var(--s2-bg); }
+.S3 { --c: var(--s3); --cbg: var(--s3-bg); } .S4 { --c: var(--s4); --cbg: var(--s4-bg); }
+
+/* cluster */
+.cluster { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.driver { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 14px; }
+.box-h { font: 600 12px var(--font-mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 5px; }
+.jobs { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.job { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.mot { border-collapse: collapse; font: 11.5px var(--font-mono); font-variant-numeric: tabular-nums; }
+.mot th { text-align: left; font-weight: 500; color: var(--muted); padding: 2px 8px 2px 0; white-space: nowrap; }
+.mot td { padding: 2px 2px; }
+.mot td span { display: inline-block; min-width: 26px; text-align: center; border-radius: 4px; padding: 1px 3px; background: var(--sunk); color: var(--muted); }
+.mot td span.has { background: var(--cbg); color: var(--c); }
+.mot td span.gone { background: var(--bad-bg); color: var(--bad); }
+.mot-wrap { overflow-x: auto; }
+.exec { border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.exec.dead { background: repeating-linear-gradient(135deg, var(--sunk) 0 6px, transparent 6px 12px); border-color: var(--bad); }
+.exec-h { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.exec-h b { font: 600 14px var(--font-display); }
+.slot { border-radius: 6px; padding: 4px 7px; font: 12px var(--font-mono); background: var(--sunk); color: var(--muted); display: flex; flex-direction: column; gap: 3px; min-height: 38px; justify-content: center; }
+.slot.busy { background: var(--cbg); color: var(--c); }
+.prog { height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--c) 20%, transparent); overflow: hidden; }
+.prog i { display: block; height: 100%; background: var(--c); }
+.disk { display: flex; flex-wrap: wrap; gap: 3px; }
+.file { font: 10.5px var(--font-mono); border-radius: 4px; padding: 0 4px; background: var(--cbg); color: var(--c); }
+.disk-note { font-size: 11.5px; color: var(--muted); }
+
+/* story */
+.story { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 70px); }
+.events { display: flex; flex-direction: column; gap: 10px; }
+.ev { display: flex; flex-direction: column; gap: 4px; padding-left: 10px; border-left: 3px solid var(--line); border-radius: 0; }
+.ev.k-bad { border-left-color: var(--bad); } .ev.k-good { border-left-color: var(--good); } .ev.k-acc { border-left-color: var(--accent); }
+.ev .tag { font: 500 10.5px var(--font-mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.ev.k-bad .tag { color: var(--bad); } .ev.k-good .tag { color: var(--good); } .ev.k-acc .tag { color: var(--accent); }
+.ev .txt { font-size: 14px; }
+.ev .why { font-size: 13px; color: var(--muted); background: var(--sunk); border-radius: 6px; padding: 6px 9px; }
+.log { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; border-top: 1px solid var(--line); padding-top: 8px; }
+.log button { all: unset; cursor: pointer; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 6px; font-size: 12.5px; padding: 3px 4px; border-radius: 5px; color: var(--muted); }
+.log button:hover { background: var(--sunk); }
+.log button:focus-visible { outline: 2px solid var(--accent); }
+.log button.cur { background: var(--accent-bg); color: var(--ink); }
+.log button .t { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.log button .x { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* timeline */
+.tl-scroll { overflow-x: auto; }
+.tl { position: relative; font: 11px var(--font-mono); }
+.tl-row { position: relative; height: 26px; border-top: 1px solid var(--line); }
+.tl-row .lab { position: absolute; left: 0; top: 0; width: 76px; height: 100%; display: flex; align-items: center; color: var(--muted); }
+.tl-row .lane { position: absolute; left: 76px; top: 0; bottom: 0; right: 0; }
+.blk { position: absolute; top: 3px; height: 19px; border-radius: 4px; background: var(--c); color: var(--on-solid); display: flex; align-items: center; padding: 0 4px; overflow: hidden; white-space: nowrap; font-size: 10.5px; }
+.blk.run { background: var(--cbg); color: var(--c); border: 1px solid var(--c); }
+.blk.spec { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.blk.failed, .blk.fetchfail { background: var(--bad-bg); color: var(--bad); border: 1.5px solid var(--bad); }
+.blk.fetchfail { border-style: dashed; }
+.blk.lost { background: repeating-linear-gradient(135deg, var(--bad-bg) 0 4px, var(--panel) 4px 8px); color: var(--bad); border: 1px solid var(--bad); }
+.blk.killed { background: repeating-linear-gradient(135deg, var(--sunk) 0 4px, var(--panel) 4px 8px); color: var(--muted); border: 1px solid var(--muted); }
+.dead-zone { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--bad) 14%, transparent) 5px 7px); }
+.axis { position: relative; height: 18px; margin-left: 76px; color: var(--muted); }
+.axis span { position: absolute; transform: translateX(-50%); font-variant-numeric: tabular-nums; }
+.cursor { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); z-index: 2; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); align-items: center; }
+.legend .sw { display: inline-flex; align-items: center; gap: 5px; }
+.legend .sw i { width: 22px; height: 12px; border-radius: 3px; display: inline-block; position: static; padding: 0; }
+
+/* reference */
+.ref { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 18px; }
+table.cfg { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.cfg td, table.cfg th { text-align: left; padding: 6px 8px 6px 0; border-top: 1px solid var(--line); vertical-align: top; }
+table.cfg th { font-weight: 500; color: var(--muted); border-top: 0; font-size: 12px; }
+table.cfg td:first-child { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+table.cfg td:nth-child(2) { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+.cfg-wrap { overflow-x: auto; }
+ul.simp { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+
+@media (max-width: 1000px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .story { position: static; }
+  .ref, .scen-detail { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 700px) {
+  .dag { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .link { flex-direction: row; justify-content: center; gap: 6px; }
+  .link .ar { transform: rotate(90deg); }
+  .cluster { grid-template-columns: minmax(0, 1fr); }
+  .driver { grid-template-columns: minmax(0, 1fr); }
+  h1 { font-size: 26px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cell, .slot, .stage { transition: background-color .2s, border-color .2s; }
+}
+
+/* engine switch */
+.top-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; padding: 3px; background: var(--panel); gap: 3px; }
+.seg button { border: 0; background: transparent; border-radius: 7px; padding: 6px 16px; cursor: pointer; font: 600 14px var(--font-display); color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-solid); }
+.opt select { font: 500 13px var(--font-mono); padding: 3px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--sunk); color: var(--ink); }
+
+/* trino stages and tasks */
+.tdag { display: flex; flex-direction: column; gap: 4px; }
+.tstage { border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; display: flex; flex-direction: column; gap: 8px; }
+.tstage.running { border-color: var(--c); }
+.tstage .nm { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.tstage .nm b { font: 600 14px var(--font-display); color: var(--c); }
+.tstage .nm span { font-size: 12.5px; }
+.ttasks { display: flex; flex-wrap: wrap; gap: 8px; }
+.ttask { border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; display: flex; flex-direction: column; gap: 5px; background: var(--sunk); min-width: 0; }
+.ttask.failed { border-color: var(--bad); background: var(--bad-bg); }
+.ttask.finished { opacity: .8; }
+.ttask .th { display: flex; gap: 6px; align-items: baseline; font: 500 11.5px var(--font-mono); }
+.ttask .th .w { color: var(--muted); }
+.drivers { display: flex; flex-wrap: wrap; gap: 3px; }
+.dchip { font: 500 10.5px var(--font-mono); border-radius: 4px; padding: 1px 5px; border: 1px solid var(--c); color: var(--c); background: var(--panel); }
+.dchip.blocked { border-style: dashed; border-color: var(--muted); color: var(--muted); }
+.dchip.run { background: var(--cbg); box-shadow: 0 0 0 1.5px var(--accent); }
+.dchip.done { background: var(--c); color: var(--on-solid); }
+.dchip.failed, .dchip.lost { border-color: var(--bad); color: var(--bad); background: var(--bad-bg); }
+.dchip.killed { border-color: var(--muted); color: var(--muted); text-decoration: line-through; background: transparent; }
+.tlink { text-align: center; font: 11px var(--font-mono); color: var(--muted); }
+.tlink b { color: var(--accent); font-weight: 500; }
+.split-row { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: 12.5px; }
+.split { font: 10.5px var(--font-mono); border-radius: 4px; padding: 0 4px; background: var(--cbg); color: var(--c); }
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; font-size: 12.5px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-family: var(--font-mono); font-size: 12px; }
+[hidden] { display: none !important; }
+</style>
+
+<main>
+  <header class="top-row">
+    <div class="intro">
+      <span class="eyebrow">Distributed query engines · simulated</span>
+      <h1>Spark and Trino job lab</h1>
+      <p class="lede" id="lede"></p>
+    </div>
+    <div class="seg" role="group" aria-label="Engine">
+      <button id="eng-spark" data-engine="spark" aria-pressed="true">Spark</button>
+      <button id="eng-trino" data-engine="trino" aria-pressed="false">Trino</button>
+    </div>
+  </header>
+
+  <section class="panel" aria-label="Scenario">
+    <div class="scen-list" role="tablist" id="scen-list"></div>
+    <div class="scen-detail">
+      <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+        <p id="scen-blurb"></p>
+        <div class="opts" id="scen-opts"></div>
+      </div>
+      <pre id="scen-code"></pre>
+    </div>
+  </section>
+
+  <div class="bar" role="toolbar" aria-label="Step controls">
+    <button class="btn" id="b-reset" aria-label="Back to the start">⏮</button>
+    <button class="btn" id="b-back" aria-label="Previous step">◀ Back</button>
+    <button class="btn primary" id="b-next" aria-label="Next step">Next ▶</button>
+    <button class="btn" id="b-play">Play</button>
+    <input type="range" id="scrub" min="0" max="0" value="0" aria-label="Step">
+    <span class="where" id="where"></span>
+  </div>
+
+  <div class="grid">
+    <div class="left">
+      <section class="panel" aria-label="Stages">
+        <div class="panel-h"><h2 id="dag-h">Stages</h2><span class="faint" id="dag-sub"></span></div>
+        <div id="dag"></div>
+      </section>
+      <section class="panel" aria-label="Cluster">
+        <div class="panel-h"><h2>Cluster</h2><span class="faint" id="cluster-sub"></span></div>
+        <div class="cluster" id="cluster"></div>
+      </section>
+    </div>
+    <aside class="panel story" aria-label="What happened" id="story-panel">
+      <div class="panel-h"><h2 id="story-h">What happened</h2></div>
+      <div class="events" id="events" aria-live="polite"></div>
+      <div class="log" id="log" aria-label="All steps"></div>
+    </aside>
+  </div>
+
+  <section class="panel" aria-label="Timeline">
+    <div class="panel-h"><h2 id="tl-h">Task slots over time</h2><span class="faint" id="tl-sub"></span></div>
+    <div class="tl-scroll"><div class="tl" id="tl"></div></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section class="ref" data-for="spark">
+    <div class="panel">
+      <h2>Spark settings this page models</h2>
+      <div class="cfg-wrap"><table class="cfg">
+        <thead><tr><th>Setting</th><th>Default</th><th>Where you see it</th></tr></thead>
+        <tbody>
+          <tr><td>spark.task.maxFailures</td><td>4</td><td>Task failure: the fourth failure of one task aborts the job.</td></tr>
+          <tr><td>spark.stage.maxConsecutiveAttempts</td><td>4</td><td>Executor lost: a stage may fail on FetchFailed this many times before the job is aborted.</td></tr>
+          <tr><td>spark.shuffle.service.enabled</td><td>false</td><td>Executor lost: with it on, shuffle files outlive their executor.</td></tr>
+          <tr><td>spark.speculation</td><td>false</td><td>Straggler: turned on in that example.</td></tr>
+          <tr><td>spark.speculation.quantile</td><td>0.75</td><td>Straggler: copies start once 75% of a stage's tasks are done.</td></tr>
+          <tr><td>spark.speculation.multiplier</td><td>1.5</td><td>Straggler: a task is slow once it runs 1.5 × the median.</td></tr>
+          <tr><td>spark.sql.shuffle.partitions</td><td>200</td><td>4 here, so every reduce task fits on screen.</td></tr>
+          <tr><td>spark.sql.files.maxPartitionBytes</td><td>128 MB</td><td>One scan task per split: 8 splits for store_sales, 2 for item.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <div class="panel">
+      <h2>What is simplified</h2>
+      <ul class="simp">
+        <li>Time moves in ticks, not seconds, and a task fetches all its shuffle input in its first tick.</li>
+        <li>The scheduler is FIFO: lower stage ids first, then the executor with the most free cores. Data locality, delay scheduling and AQE are left out.</li>
+        <li>Executors are not replaced after they are lost. With dynamic allocation, the cluster manager would usually start a new one.</li>
+        <li>Shuffle files live until the driver's ContextCleaner removes them, which can be long after the job ends; here they stay until the end.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="ref" data-for="trino" hidden>
+    <div class="panel">
+      <h2>Trino settings this page models</h2>
+      <div class="cfg-wrap"><table class="cfg">
+        <thead><tr><th>Setting</th><th>Default</th><th>Where you see it</th></tr></thead>
+        <tbody>
+          <tr><td>retry-policy</td><td>NONE</td><td>Every example: NONE fails the query on any task failure, QUERY re-runs the whole query, TASK re-runs single tasks.</td></tr>
+          <tr><td>query-retry-attempts</td><td>4</td><td>retry-policy=QUERY: how many times the whole query may restart.</td></tr>
+          <tr><td>task-retry-attempts-per-task</td><td>4</td><td>retry-policy=TASK: how many times one task may be retried.</td></tr>
+          <tr><td>exchange-manager.name</td><td>none</td><td>retry-policy=TASK needs it (for example <code>filesystem</code> on S3 or HDFS) to spool exchange data.</td></tr>
+          <tr><td>query.execution-policy</td><td>phased</td><td>store_sales splits are held back until the item build side is done.</td></tr>
+          <tr><td>node-scheduler.max-pending-splits-per-task</td><td>16</td><td>2 here: each task holds at most 2 unfinished splits, and is topped up as they finish.</td></tr>
+          <tr><td>task.max-worker-threads</td><td>2 × cores</td><td>2 per worker here, shared by every driver on the worker.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <div class="panel">
+      <h2>What is simplified</h2>
+      <ul class="simp">
+        <li>One tick is one scheduling quantum (about 1 s in Trino). Each thread runs the runnable driver that has used the least CPU, a stand-in for the multilevel feedback queue.</li>
+        <li>A stage-1 task folds in every page queued for it in one quantum.</li>
+        <li>With retry-policy=TASK, a stage starts only after the stage before it has finished. Real fault-tolerant execution can start some downstream work earlier.</li>
+        <li>Dynamic filtering, memory limits, spilling and output buffer backpressure are left out.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+const STAGES = {
+  S0: { id: "S0", n: 0, name: "Scan store_sales", parts: 8, parents: [], shuffle: 0, dur: [3, 3, 4, 3, 3, 4, 3, 3] },
+  S1: { id: "S1", n: 1, name: "Scan item", parts: 2, parents: [], shuffle: 1, dur: [2, 2] },
+  S2: { id: "S2", n: 2, name: "Join + partial agg", parts: 4, parents: ["S0", "S1"], shuffle: 2, dur: [3, 3, 3, 3] },
+  S3: { id: "S3", n: 3, name: "Final agg → collect()", parts: 4, parents: ["S2"], shuffle: null, dur: [2, 2, 2, 2] },
+  S4: { id: "S4", n: 4, name: "Count → count()", parts: 4, parents: ["S2"], shuffle: null, dur: [1, 1, 1, 1] },
+};
+const SHUFFLE_STAGE = { 0: "S0", 1: "S1", 2: "S2" };
+const EXECS = ["E1", "E2", "E3"];
+
+const DF_CODE = `val sales = spark.read.parquet("store_sales")  // 8 splits
+val item  = spark.read.parquet("item")         // 2 splits
+sales.join(item, "item_id")
+     .groupBy("brand").agg(sum("price"))
+     .collect()                                // the action: job 0`;
+
+const SCENARIOS = [
+  { id: "clean", name: "Clean run", short: "Stages, tasks and shuffle files",
+    blurb: "Nothing fails. Watch the DAGScheduler submit S0 and S1 first, hold S2 until both have all their map outputs, and then run the reduce side. Tasks are created only when their stage is submitted.",
+    code: DF_CODE, opts: [], build: () => ({}) },
+  { id: "task-failure", name: "Task failure", short: "One task throws; only it re-runs",
+    blurb: "Task S0 p4 throws an exception two ticks in, say a corrupt record or a transient I/O error. Spark retries just that task. Turn on the option to make it fail every time and see the job abort after four failures.",
+    code: DF_CODE, opts: [{ id: "always", label: "Fail on every attempt", def: false }],
+    build: (o) => ({ failAt: (t) => (t.stage === "S0" && t.part === 4 && (o.always || t.att === 0) ? 2 : null) }) },
+  { id: "executor-lost", name: "Executor lost", short: "Shuffle files vanish; FetchFailed",
+    blurb: "Executor E2 dies at tick 8 while S2 is running. Its running task is re-queued, and the shuffle files on its disk are gone with it. The next task that needs them hits FetchFailed, and Spark re-runs only the lost map partitions. Turn on the external shuffle service to keep the files.",
+    code: DF_CODE, opts: [{ id: "ess", label: "External shuffle service", def: false }],
+    build: (o) => ({ ess: o.ess, inject: (tick, api) => { if (tick === 8) api.loseExecutor("E2"); } }) },
+  { id: "straggler", name: "Straggler", short: "A slow task gets a speculative copy",
+    blurb: "S2 p3 lands on E1 with a slow disk and needs 10 ticks instead of 3. With speculation on, Spark launches a copy on another executor once the task is clearly behind; the first to finish wins. Turn speculation off to see the whole job wait for one task.",
+    code: DF_CODE, opts: [{ id: "spec", label: "spark.speculation", def: true }],
+    build: (o) => ({ speculation: o.spec, specDur: 3, dur: (t) => (t.stage === "S2" && t.part === 3 && !t.spec ? 10 : null) }) },
+  { id: "reuse", name: "Second action", short: "A later job skips finished stages",
+    blurb: "The same RDD is used by two actions. Job 1 needs the output of S2's shuffle, which job 0 left on the executors' disks, so S0, S1 and S2 are skipped and only the new result stage runs.",
+    code: `val agg = sales.keyBy(_.itemId)
+               .join(items.keyBy(_.id))       // shuffle (S0, S1 → S2)
+               .map { case (_, (s, i)) => (i.brand, s.price) }
+               .reduceByKey(_ + _)              // shuffle (S2 → result)
+agg.collect()   // job 0
+agg.count()     // job 1: S0–S2 skipped
+
+// With DataFrames each action is planned again, so the shuffles
+// usually re-run unless you cache() the DataFrame.`,
+    opts: [], build: () => ({ jobs: [{ action: "collect()", result: "S3" }, { action: "count()", result: "S4" }] }) },
+];
+
+// ---------------------------------------------------------------- simulator
+function simulate(extra) {
+  const cfg = { jobs: [{ action: "collect()", result: "S3" }], specDur: 3, ...extra };
+  const stageIds = [...new Set(cfg.jobs.flatMap((j) => ancestorsOf(j.result).concat(j.result)))].sort((a, b) => STAGES[a].n - STAGES[b].n);
+  const st = { tick: 0, ess: !!cfg.ess, execs: {}, stages: {}, outputs: {}, tasks: {}, pending: [], seq: 0, gantt: [], fails: {}, lost: {}, jobs: [], nextJobAt: null, over: false, stageIds };
+  for (const e of EXECS) st.execs[e] = { id: e, alive: true, slots: [null, null], disk: [], lostAt: null };
+  for (const id of stageIds) {
+    const d = STAGES[id];
+    st.stages[id] = { id, n: d.n, name: d.name, parts: d.parts, parents: d.parents, shuffle: d.shuffle, status: "idle", attempt: -1, results: d.shuffle == null ? Array(d.parts).fill(false) : null };
+    if (d.shuffle != null) st.outputs[d.shuffle] = Array(d.parts).fill(null);
+  }
+  st.jobs = cfg.jobs.map((j, i) => ({ id: i, action: j.action, result: j.result, status: "idle", start: null, end: null, skipped: [] }));
+
+  const steps = [];
+  let ev = [], okBatch = [];
+  const seen = {};
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const avail = (id) => { const s = st.stages[id]; return s.shuffle != null && st.outputs[s.shuffle].every(Boolean); };
+  const E = (kind, text, why = "") => { flushOk(); ev.push({ kind, text, why }); };
+  const once = (k, why) => (seen[k] ? "" : ((seen[k] = 1), why));
+  const freeSlot = (t) => { const e = st.execs[t.exec]; if (e.slots[t.slot] === t.id) e.slots[t.slot] = null; };
+  const gEnd = (t, status) => { const g = st.gantt.find((x) => x.task === t.id); if (g) { g.end = st.tick; g.status = status; } };
+  const curJob = () => st.jobs.find((j) => j.status === "running");
+
+  function flushOk() {
+    if (!okBatch.length) return;
+    const items = okBatch; okBatch = [];
+    const txt = items.map((t) => {
+      const s = st.stages[t.stage];
+      const z = t.satt < s.attempt ? " (from the failed attempt; output kept)" : "";
+      return s.shuffle != null ? `${t.stage} p${t.part} on ${t.exec} → sh${s.shuffle}/p${t.part}${z}` : `${t.stage} p${t.part} → result to driver`;
+    });
+    let why = "";
+    if (items.some((t) => st.stages[t.stage].shuffle != null)) why = once("map", "A map task writes its output to the executor's local disk, already split by the next stage's partitions, and reports where it is to the driver's MapOutputTracker.");
+    if (!why && items.some((t) => st.stages[t.stage].shuffle == null)) why = once("res", "A result task sends its rows straight to the driver. Nothing is written to disk.");
+    ev.push({ kind: "ok", text: `Finished ${items.length}: ${txt.join("; ")}.`, why });
+  }
+
+  function submitJob(j) {
+    j.status = "running"; j.start = st.tick;
+    const anc = ancestorsOf(j.result);
+    j.skipped = anc.filter(avail);
+    if (j.id === 0) {
+      E("job", `Job 0 submitted by ${j.action}. The DAGScheduler cuts the plan at its shuffles into ${plural(anc.length + 1, "stage")}: ${[...anc, j.result].join(", ")}.`,
+        "The whole stage graph is known now, but no stage has tasks yet. Tasks are created one stage at a time, when the stage is submitted.");
+    } else {
+      E("job", `Job ${j.id} submitted by ${j.action}. It needs ${[...anc, j.result].join(", ")}; ${j.skipped.join(", ")} already ${j.skipped.length === 1 ? "has" : "have"} every map output.`,
+        `Shuffle map stages belong to the shuffle, not to a job, so job ${j.id} finds ${j.skipped.join(", ")} complete and skips them. The Spark UI lists them as "skipped stages". Only ${j.result} gets tasks.`);
+    }
+    submitStage(j.result);
+  }
+  function submitStage(id) {
+    const s = st.stages[id];
+    if (s.status === "running") return;
+    const missing = s.parents.filter((p) => !avail(p));
+    if (missing.length) {
+      if (s.status !== "waiting") {
+        s.status = "waiting";
+        E("wait", `${id} waits for ${missing.join(" and ")}.`, once("wait", "A stage is submitted only when every parent stage has all its map outputs: the shuffle is a barrier."));
+      }
+      for (const p of missing) submitStage(p);
+    } else submitTasks(s);
+  }
+  function submitTasks(s) {
+    s.attempt++; s.status = "running";
+    const parts = [...Array(s.parts).keys()].filter((p) => (s.shuffle != null ? !st.outputs[s.shuffle][p] : !s.results[p]));
+    for (const p of parts) addTask(s.id, p, {});
+    const all = parts.length === s.parts;
+    const why = s.attempt === 0
+      ? (s.parents.length ? `${s.parents.join(" and ")} ${s.parents.length > 1 ? "are" : "is"} complete, so the driver knows where every block of input lives. One task per shuffle partition.` : once("root", "It has no parent stages, so it is submitted at once. One task per input split."))
+      : `Only partitions without output are recomputed. The other ${s.parts - parts.length} keep their existing ${s.shuffle != null ? "shuffle files" : "results"}.`;
+    E("stage", `${s.id} submitted${s.attempt ? `, attempt ${s.attempt}` : ""}: ${plural(parts.length, "task")}${all ? "" : ` for ${parts.map((p) => "p" + p).join(", ")}`}.`, why);
+  }
+  function addTask(stage, part, o) {
+    const id = st.seq++;
+    const att = Object.values(st.tasks).filter((t) => t.stage === stage && t.part === part).length;
+    st.tasks[id] = { id, stage, part, att, satt: st.stages[stage].attempt, status: "pending", exec: null, slot: null, start: null, dur: null, spec: !!o.spec, avoid: o.avoid || null, fetched: false, copied: false };
+    st.pending.push(id);
+    return st.tasks[id];
+  }
+  function schedule() {
+    st.pending.sort((a, b) => { const A = st.tasks[a], B = st.tasks[b]; return st.stages[A.stage].n - st.stages[B.stage].n || A.part - B.part || a - b; });
+    const launched = [];
+    for (const id of [...st.pending]) {
+      const t = st.tasks[id];
+      const free = Object.values(st.execs).filter((e) => e.alive && e.slots.includes(null));
+      if (!free.length) break;
+      let c = free.filter((e) => e.id !== t.avoid);
+      if (!c.length) { if (t.spec) continue; c = free; }
+      const nFree = (e) => e.slots.filter((x) => x == null).length;
+      c.sort((a, b) => nFree(b) - nFree(a) || a.id.localeCompare(b.id));
+      const e = c[0], slot = e.slots.indexOf(null);
+      e.slots[slot] = id;
+      Object.assign(t, { exec: e.id, slot, start: st.tick, status: "running" });
+      t.dur = t.spec ? cfg.specDur : (cfg.dur?.(t) ?? STAGES[t.stage].dur[t.part]);
+      st.pending.splice(st.pending.indexOf(id), 1);
+      st.gantt.push({ task: id, exec: e.id, slot, stage: t.stage, part: t.part, att: t.att, start: st.tick, end: null, status: "run", spec: t.spec });
+      launched.push(t);
+    }
+    if (!launched.length) return;
+    const waiting = st.pending.length;
+    const txt = launched.map((t) => `${t.stage} p${t.part}${t.att && !t.spec ? ` (attempt ${t.att})` : ""}${t.spec ? " (speculative copy)" : ""} → ${t.exec}`).join(", ");
+    E("launch", `Launched ${plural(launched.length, "task")}: ${txt}.${waiting ? ` ${plural(waiting, "task")} ${waiting === 1 ? "waits" : "wait"} for a free core.` : ""}`,
+      once("launch", "Each task takes one core until it finishes. The FIFO scheduler hands out tasks of lower stage ids first, here to the executor with the most free cores."));
+  }
+  function taskSucceeded(t) {
+    t.status = "success"; freeSlot(t); gEnd(t, "ok");
+    const s = st.stages[t.stage];
+    if (s.shuffle != null) {
+      if (!st.outputs[s.shuffle][t.part]) {
+        st.outputs[s.shuffle][t.part] = t.exec;
+        st.execs[t.exec].disk.push(`sh${s.shuffle}/p${t.part}`);
+        delete st.lost[`${t.stage}:${t.part}`];
+      }
+    } else s.results[t.part] = true;
+    okBatch.push(t);
+    for (const o of Object.values(st.tasks)) {
+      if (o === t || o.stage !== t.stage || o.part !== t.part || o.status !== "running") continue;
+      o.status = "killed"; freeSlot(o); gEnd(o, "killed");
+      E("kill", `${o.spec ? "The speculative copy" : "The original"} of ${t.stage} p${t.part} on ${o.exec} is killed: the ${t.spec ? "speculative copy" : "original"} on ${t.exec} finished first.`,
+        "Both attempts compute the same partition from the same input, so the first result wins and the other is cancelled. That is why speculation is safe for deterministic tasks.");
+    }
+  }
+  function taskFailed(t) {
+    t.status = "failed"; freeSlot(t); gEnd(t, "failed");
+    const key = `${t.stage}:${t.part}`;
+    const n = (st.fails[key] = (st.fails[key] || 0) + 1);
+    if (n >= 4) {
+      E("abort", `${t.stage} p${t.part} failed again on ${t.exec}, its 4th failure. Job ${curJob().id} is aborted.`,
+        "spark.task.maxFailures is 4. When one task has failed that many times, its stage fails, the job fails, and running tasks are killed. The action throws a SparkException to your code.");
+      abortJob();
+      return;
+    }
+    addTask(t.stage, t.part, { avoid: t.exec });
+    E("fail", `${t.stage} p${t.part} attempt ${t.att} threw an exception on ${t.exec}. A retry is queued (failure ${n} of 4).`,
+      n === 1 ? "Only this task runs again. It re-reads its own input split; no other task or stage is touched. The retry usually goes to another executor when one has a free core." : "");
+  }
+  function abortJob() {
+    for (const o of Object.values(st.tasks)) {
+      if (o.status === "running") { o.status = "killed"; freeSlot(o); gEnd(o, "killed"); }
+      if (o.status === "pending") o.status = "cancelled";
+    }
+    st.pending = [];
+    for (const s of Object.values(st.stages)) if (s.status === "running" || s.status === "waiting") s.status = "aborted";
+    const j = curJob(); j.status = "failed"; j.end = st.tick; st.over = true;
+  }
+  function fetchFailed(t, miss) {
+    t.status = "fetchfail"; freeSlot(t); gEnd(t, "fetchfail");
+    const s = st.stages[t.stage];
+    st.pending = st.pending.filter((id) => { if (st.tasks[id].stage !== s.id) return true; st.tasks[id].status = "cancelled"; return false; });
+    const lostParents = s.parents.filter((p) => !avail(p));
+    s.status = "failed";
+    E("fetch", `${t.stage} p${t.part} cannot fetch ${miss.slice(0, 3).join(", ")}${miss.length > 3 ? ` and ${miss.length - 3} more` : ""}: FetchFailed. ${s.id} attempt ${s.attempt} fails.`,
+      `Retrying the task cannot help when its input is gone, so the DAGScheduler fails the whole stage attempt and resubmits the parent stage${lostParents.length > 1 ? "s" : ""} ${lostParents.join(" and ")} for just the missing partitions. Tasks of the failed attempt that are still running may finish, and their output is kept.`);
+    submitStage(s.id);
+  }
+  function loseExecutor(id) {
+    const e = st.execs[id];
+    e.alive = false; e.lostAt = st.tick;
+    const running = Object.values(st.tasks).filter((t) => t.exec === id && t.status === "running");
+    for (const t of running) { t.status = "lost"; freeSlot(t); gEnd(t, "lost"); addTask(t.stage, t.part, {}); }
+    E("exec-lost", `Executor ${id} is lost: it stopped sending heartbeats.${running.length ? ` Its running task${running.length > 1 ? "s" : ""} ${running.map((t) => `${t.stage} p${t.part}`).join(", ")} ${running.length > 1 ? "are" : "is"} re-queued.` : ""}`,
+      "Tasks that die with their executor are re-queued and do not count toward spark.task.maxFailures: the task did nothing wrong.");
+    if (st.ess) {
+      E("ess", `${id}'s ${plural(e.disk.length, "shuffle file")} stay on the node. The external shuffle service keeps serving them.`,
+        "With spark.shuffle.service.enabled, shuffle files are served by a separate process on each node, so they outlive the executor that wrote them. They are lost only if the whole node goes down.");
+      return;
+    }
+    const removed = [], hit = new Set();
+    for (const [sh, arr] of Object.entries(st.outputs)) arr.forEach((x, i) => { if (x === id) { arr[i] = null; removed.push(`sh${sh}/p${i}`); st.lost[`${SHUFFLE_STAGE[sh]}:${i}`] = true; hit.add(SHUFFLE_STAGE[sh]); } });
+    e.disk = [];
+    for (const sid of hit) if (st.stages[sid].status === "complete") st.stages[sid].status = "partial";
+    if (removed.length) {
+      E("unreg", `Its shuffle files are gone with it: ${removed.join(", ")}. The driver drops them from the MapOutputTracker.`,
+        `${[...hit].join(" and ")} now ${hit.size > 1 ? "have" : "has"} missing map outputs. Nothing is recomputed yet: Spark waits until a task actually needs the data.`);
+    }
+  }
+  function speculate() {
+    if (!cfg.speculation) return;
+    for (const s of Object.values(st.stages)) {
+      if (s.status !== "running") continue;
+      const ok = st.gantt.filter((g) => g.stage === s.id && g.status === "ok").map((g) => g.end - g.start).sort((a, b) => a - b);
+      if (ok.length < Math.ceil(0.75 * s.parts)) continue;
+      const med = ok[Math.floor(ok.length / 2)];
+      for (const t of Object.values(st.tasks)) {
+        if (t.stage !== s.id || t.status !== "running" || t.spec || t.copied) continue;
+        const el = st.tick - t.start;
+        if (el > 1.5 * med) {
+          t.copied = true;
+          addTask(s.id, t.part, { spec: true, avoid: t.exec });
+          E("spec", `${s.id} p${t.part} has run ${el} ticks on ${t.exec}, more than 1.5 × the median of ${med}. A speculative copy is queued for another executor.`,
+            "Speculation starts once 75% of a stage's tasks have finished (spark.speculation.quantile) and then copies any task running longer than spark.speculation.multiplier × their median time. The original keeps running.");
+        }
+      }
+    }
+  }
+  function checkStages() {
+    const finished = [];
+    for (const s of Object.values(st.stages).sort((a, b) => a.n - b.n)) {
+      if (s.status !== "running") continue;
+      const done = s.shuffle != null ? avail(s.id) : s.results.every(Boolean);
+      if (!done) continue;
+      s.status = "complete";
+      if (s.shuffle != null) {
+        finished.push(s);
+        const next = Object.values(st.stages).filter((w) => w.status === "waiting" && w.parents.includes(s.id));
+        E("done", `${s.id} is complete: all ${s.parts} map outputs are registered.`, next.length ? `Stages waiting on ${s.id}: ${next.map((w) => w.id).join(", ")}.` : "");
+      } else {
+        const j = st.jobs.find((x) => x.result === s.id);
+        j.status = "done"; j.end = st.tick;
+        E("job-done", `Job ${j.id} finished at tick ${st.tick}: the driver has all ${s.parts} results and ${j.action} returns.`, "");
+        const nxt = st.jobs.find((x) => x.status === "idle");
+        if (nxt) st.nextJobAt = st.tick + 1; else st.over = true;
+      }
+    }
+    if (!finished.length) return;
+    for (const w of Object.values(st.stages).sort((a, b) => a.n - b.n)) {
+      if (w.status === "waiting" && w.parents.every(avail)) submitTasks(w);
+    }
+  }
+  const api = { loseExecutor };
+
+  function snapshot() { flushOk(); steps.push({ tick: st.tick, events: ev, st: structuredClone(st) }); ev = []; }
+
+  submitJob(st.jobs[0]); schedule(); snapshot();
+  while (!st.over && st.tick < 60) {
+    st.tick++;
+    if (st.nextJobAt === st.tick) { st.nextJobAt = null; submitJob(st.jobs.find((x) => x.status === "idle")); }
+    cfg.inject?.(st.tick, api);
+    const running = Object.values(st.tasks).filter((t) => t.status === "running").sort((a, b) => a.id - b.id);
+    for (const t of running) {
+      if (t.status !== "running") continue;
+      const s = st.stages[t.stage];
+      if (s.parents.length && !t.fetched && st.tick >= t.start + 1) {
+        const miss = [];
+        for (const p of s.parents) { const sh = st.stages[p].shuffle; st.outputs[sh].forEach((x, i) => { if (!x) miss.push(`sh${sh}/p${i}`); }); }
+        if (miss.length) { fetchFailed(t, miss); continue; }
+        t.fetched = true;
+      }
+      const f = cfg.failAt?.(t);
+      if (f != null && st.tick === t.start + f) { taskFailed(t); if (st.over) break; continue; }
+      if (st.tick >= t.start + t.dur) taskSucceeded(t);
+    }
+    if (!st.over) { flushOk(); checkStages(); speculate(); schedule(); }
+    if (st.over) summary();
+    flushOk();
+    if (ev.length) snapshot();
+  }
+  return steps;
+
+  function summary() {
+    const g = st.gantt;
+    const c = (s) => g.filter((x) => x.status === s).length;
+    const okN = c("ok"), parts = new Set(g.filter((x) => x.status === "ok").map((x) => `${x.stage}:${x.part}`)).size;
+    const bits = [`${okN} succeeded`];
+    if (c("failed")) bits.push(`${c("failed")} failed`);
+    if (c("lost")) bits.push(`${c("lost")} died with an executor`);
+    if (c("fetchfail")) bits.push(`${c("fetchfail")} hit FetchFailed`);
+    if (c("killed")) bits.push(`${c("killed")} killed`);
+    const twice = okN - parts;
+    const failed = st.jobs.some((j) => j.status === "failed");
+    E("summary", `${g.length} task attempts in ${st.tick} ticks: ${bits.join(", ")}.${twice > 0 ? ` ${plural(twice, "partition")} had to be computed twice.` : ""}`,
+      failed ? "Shuffle files written before the failure stay on disk until they are cleaned up, but the action has failed: the next action starts over unless the data was cached." : "");
+  }
+}
+function ancestorsOf(id) {
+  const out = [];
+  const walk = (s) => { for (const p of STAGES[s].parents) { if (!out.includes(p)) { walk(p); out.push(p); } } };
+  walk(id);
+  return out.sort((a, b) => STAGES[a].n - STAGES[b].n);
+}
+
+// ---------------------------------------------------------------- trino
+for (const s of SCENARIOS) s.engine = "spark";
+const WORKERS = ["W1", "W2", "W3"];
+const T_STAGES = {
+  3: { name: "Scan item → broadcast", cls: "S1" },
+  2: { name: "Scan store_sales, join, partial agg", cls: "S0" },
+  1: { name: "Final agg, hash-partitioned", cls: "S2" },
+  0: { name: "Output → client", cls: "S3" },
+};
+const T_ORDER = ["3", "2", "1", "0"];
+const T_NEXT = { 3: "2", 2: "1", 1: "0" };
+const SPLITS = { 3: 2, 2: 8 };
+const CPU = { item: 2, probe: 3, build: 1, output: 1 };
+const MAX_PENDING = 2;
+const PAGE_BATCH = 3;
+const SQL = `SELECT i.brand, sum(s.price)
+FROM store_sales s                 -- 8 splits
+JOIN item i ON s.item_id = i.id    -- 2 splits, broadcast
+GROUP BY i.brand`;
+const policyOpt = { id: "policy", label: "retry-policy", type: "select", choices: ["NONE", "QUERY", "TASK"], def: "NONE" };
+const policyCode = (o) => `${SQL}\n\n-- config.properties\nretry-policy=${o.policy}${o.policy === "TASK" ? "\nexchange-manager.name=filesystem   # spools exchanges" : ""}`;
+
+SCENARIOS.push(
+  { engine: "trino", id: "trino-streaming", name: "Streaming run", short: "All stages at once, pages stream",
+    blurb: "The coordinator creates tasks for every stage up front. Item is scanned first; then store_sales splits are handed out a few at a time, and the final aggregation in stage 1 folds pages in while the scans still run. Set retry-policy to TASK to see spooled exchanges turn the stages into Spark-like steps.",
+    code: policyCode, opts: [policyOpt], build: (o) => ({ policy: o.policy }) },
+  { engine: "trino", id: "trino-task-failure", name: "Task failure", short: "One driver throws",
+    blurb: "At tick 5 a probe driver on W2 throws an exception. With the default retry-policy=NONE the whole query fails. QUERY starts the query again from scratch; TASK retries just the failed task, reading its input from exchange storage.",
+    code: policyCode, opts: [policyOpt], build: (o) => ({ policy: o.policy, inject: (t, api) => { if (t === 5) api.failDriver("W2"); } }) },
+  { engine: "trino", id: "trino-worker-lost", name: "Worker lost", short: "A node disappears mid-query",
+    blurb: "Worker W2 disappears at tick 6. Its tasks held in-memory output buffers that other tasks were reading, so in streaming mode nothing can resume them. Compare NONE, QUERY and TASK.",
+    code: policyCode, opts: [policyOpt], build: (o) => ({ policy: o.policy, inject: (t, api) => { if (t === 6) api.loseWorker("W2"); } }) },
+  { engine: "trino", id: "trino-slow-worker", name: "Slow worker", short: "Splits flow to the faster nodes",
+    blurb: "W3 runs at half speed. Trino has no speculative copies for slow tasks; instead, splits are handed out a couple at a time and topped up as they finish, so W3 simply gets fewer of them. With retry-policy=TASK, splits are fixed per task up front and W3 holds the query back.",
+    code: policyCode, opts: [policyOpt], build: (o) => ({ policy: o.policy, speed: { W3: 0.5 } }) },
+);
+
+function simulateTrino(x) {
+  const cfg = { policy: "NONE", speed: {}, ...x };
+  const fte = cfg.policy === "TASK";
+  const st = { engine: "trino", tick: 0, policy: cfg.policy, fte, workers: {}, attempt: -1, qstatus: "running", stages: {}, tasks: {}, drivers: {}, unassigned: { 3: [], 2: [] },
+    gantt: [], dseq: 0, over: false, restartAt: null, spool: [] };
+  for (const w of WORKERS) st.workers[w] = { id: w, alive: true, threads: [null, null], speed: cfg.speed[w] || 1, lostAt: null };
+  const steps = [];
+  let ev = [], done = [];
+  const seen = {};
+  const E = (kind, text, why = "") => ev.push({ kind, text, why });
+  const once = (k, why) => (seen[k] ? "" : ((seen[k] = 1), why));
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const alive = () => WORKERS.filter((w) => st.workers[w].alive);
+  const cur = (t) => t.qa === st.attempt;
+  const tasksOf = (sid) => st.stages[sid].tasks.map((k) => st.tasks[k]);
+  const drv = (t) => t.drivers.map((id) => st.drivers[id]);
+  const stageDone = (sid) => st.stages[sid].status === "finished";
+  const TERMINAL = ["finished", "failed", "cancelled", "lost"];
+  const splitName = (sid, s) => `${sid === "3" ? "item" : "sales"} s${s}`;
+
+  function startAttempt() {
+    st.attempt++;
+    st.stages = {};
+    for (const sid of T_ORDER) st.stages[sid] = { id: sid, status: "waiting", tasks: [], history: [] };
+    st.unassigned = { 3: [...Array(SPLITS[3]).keys()], 2: [...Array(SPLITS[2]).keys()] };
+    st.qstatus = "running";
+    st.spool = [];
+    if (fte) {
+      E("query", `Query ${st.attempt ? `attempt ${st.attempt} starts` : "submitted"} with retry-policy=TASK. Only stage 3 gets tasks now; each later stage starts when the one before it has finished.`,
+        once("q", "Exchanges are spooled to exchange storage instead of streaming through memory. That lets a single task be re-run, at the cost of stage-by-stage execution, much like Spark. Each task gets a fixed set of splits up front so a retry can redo exactly that work."));
+      createTasks("3");
+    } else {
+      for (const sid of T_ORDER) createTasks(sid);
+      const ws = alive();
+      E("query", st.attempt
+          ? `Query attempt ${st.attempt} starts from scratch on ${ws.join(", ")}: new tasks for all 4 stages.`
+          : `Query submitted. The coordinator plans 4 fragments and creates tasks for all of them at once: 2 for stage 3, one per worker for stages 2 and 1, and 1 for stage 0.`,
+        st.attempt ? "Nothing from the failed attempt is reused: its pages lived only in memory." : "Trino does not wait for one stage to finish before creating the next. Tasks are long-lived and connected by in-memory buffers, so pages can flow downstream as soon as they are produced.");
+      assignSplits();
+    }
+  }
+  function createTasks(sid) {
+    const ws = alive();
+    const placement = sid === "3" ? ws.slice(0, SPLITS[3]) : sid === "0" ? [ws[0]] : sid === "1" ? [0, 1, 2].map((i) => ws[i % ws.length]) : ws;
+    placement.forEach((w, i) => {
+      let splits = null;
+      if (fte && SPLITS[sid]) splits = [...Array(SPLITS[sid]).keys()].filter((s) => s % placement.length === i);
+      newTask(sid, i, w, 0, splits);
+    });
+    st.stages[sid].status = "running";
+    if (fte && SPLITS[sid]) {
+      E("split", `Stage ${sid} tasks get their ${sid === "3" ? "item" : "store_sales"} splits up front: ${tasksOf(sid).map((t) => `${t.id} on ${t.worker} → ${t.splits.map((s) => "s" + s).join(", ") || "none"}`).join("; ")}.`,
+        once("fixed", "A retried task must redo exactly the same work, so with retry-policy=TASK splits are bound to tasks when the tasks are created instead of being handed out on demand."));
+      st.unassigned[sid] = [];
+    }
+  }
+  function newTask(sid, part, w, att, splits) {
+    const id = `${sid}.${part}.${att}`;
+    const key = `q${st.attempt}:${id}`;
+    const t = { key, id, stage: sid, part, att, worker: w, status: "running", drivers: [], queue: 0, flushed: false, splits: splits || [], qa: st.attempt };
+    st.tasks[key] = t;
+    const s = st.stages[sid];
+    s.tasks[part] = key;
+    s.history.push(key);
+    if (sid === "2") addDriver(t, "build", "B", CPU.build);
+    if (sid === "1") addDriver(t, "final", "A", fte ? 3 : null);
+    if (sid === "0") addDriver(t, "output", "O", CPU.output);
+    for (const sp of t.splits) addDriver(t, sid === "3" ? "item" : "probe", (sid === "3" ? "I" : "P") + sp, sid === "3" ? CPU.item : CPU.probe, sp);
+    return t;
+  }
+  function addDriver(t, kind, label, need, split = null) {
+    const d = { id: st.dseq++, task: t.key, kind, label, need, progress: 0, cpu: 0, state: "live", split, qa: st.attempt, wasted: false };
+    st.drivers[d.id] = d;
+    t.drivers.push(d.id);
+    return d;
+  }
+  function runnable(d) {
+    if (TERMINAL.includes(d.state)) return false;
+    const t = st.tasks[d.task];
+    if (t.status !== "running" || !cur(t)) return false;
+    switch (d.kind) {
+      case "item": return true;
+      case "build": return stageDone("3");
+      case "probe": return drv(t).some((x) => x.kind === "build" && x.state === "finished");
+      case "final": return fte ? true : t.queue >= PAGE_BATCH || (stageDone("2") && !t.flushed);
+      case "output": return stageDone("1");
+    }
+    return false;
+  }
+  function assignSplits() {
+    for (const sid of ["3", "2"]) {
+      if (sid === "2" && !stageDone("3")) continue;
+      const tasks = tasksOf(sid).filter((t) => t.status === "running");
+      const pend = (t) => drv(t).filter((d) => (d.kind === "item" || d.kind === "probe") && !TERMINAL.includes(d.state)).length;
+      const given = [];
+      while (st.unassigned[sid].length) {
+        const c = tasks.filter((t) => pend(t) < MAX_PENDING).sort((a, b) => pend(a) - pend(b) || a.worker.localeCompare(b.worker));
+        if (!c.length) break;
+        const s = st.unassigned[sid].shift(), t = c[0];
+        t.splits.push(s);
+        addDriver(t, sid === "3" ? "item" : "probe", (sid === "3" ? "I" : "P") + s, sid === "3" ? CPU.item : CPU.probe, s);
+        given.push(`s${s} → ${t.worker}`);
+      }
+      if (given.length) {
+        const left = st.unassigned[sid].length;
+        E("split", `Assigned ${plural(given.length, sid === "3" ? "item split" : "store_sales split")}: ${given.join(", ")}.${left ? ` ${left} still queued at the coordinator.` : ""}`,
+          once("split" + sid, sid === "3"
+            ? "Splits come from the connector. The coordinator gives each task a few at a time (at most 2 unfinished here) and tops it up as splits finish. Each split becomes one driver in the task. Under the default phased policy, store_sales splits wait until the build side is done."
+            : "A task asks for more splits as its drivers finish them, so a faster worker ends up with more of the work."));
+      }
+    }
+  }
+  function runDriver(d, W, k) {
+    const t = st.tasks[d.task];
+    d.cpu += 1;
+    const last = [...st.gantt].reverse().find((g) => g.w === W.id && g.k === k);
+    if (last && last.driver === d.id && last.end === st.tick - 1) last.end = st.tick;
+    else st.gantt.push({ w: W.id, k, driver: d.id, label: d.label, stage: t.stage, start: st.tick - 1, end: st.tick });
+    if (d.kind === "probe" && !fte) {
+      const finals = tasksOf("1").filter((f) => f.status === "running");
+      if (finals.length) finals[(d.split + d.cpu) % finals.length].queue += 1;
+    }
+    if (d.kind === "final" && !fte) {
+      d.pages = (d.pages || 0) + t.queue; t.queue = 0;
+      if (stageDone("2")) { t.flushed = true; finish(d); }
+      return;
+    }
+    d.progress += W.speed;
+    if (d.progress >= d.need - 1e-9) finish(d);
+  }
+  function finish(d) { d.state = "finished"; done.push(d); }
+  function checkTasks() {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const t of Object.values(st.tasks)) {
+        if (t.status !== "running" || !cur(t)) continue;
+        const ds = drv(t);
+        const noMore = st.unassigned[t.stage] ? st.unassigned[t.stage].length === 0 : true;
+        if (ds.length && ds.every((d) => d.state === "finished") && noMore) { t.status = "finished"; changed = true; if (fte) st.spool.push(t.id); }
+      }
+      for (const sid of T_ORDER) {
+        const s = st.stages[sid];
+        if (s.status === "running" && s.tasks.length && tasksOf(sid).every((t) => t.status === "finished")) { s.status = "finished"; changed = true; stageFinished(sid); }
+      }
+    }
+  }
+  function stageFinished(sid) {
+    if (fte && sid === "0") { queryDone(); return; }
+    if (fte) {
+      E("spool", `Stage ${sid} finished. Its tasks' output is committed to exchange storage.`,
+        once("spool", "A task's output counts only once the whole task has finished. Downstream tasks read it from exchange storage (S3, HDFS or a local file system), so they can be retried without touching the upstream stage."));
+      if (T_NEXT[sid]) createTasks(T_NEXT[sid]);
+      else queryDone();
+      return;
+    }
+    if (sid === "3") E("tstage", "Stage 3 finished: the item broadcast is complete. The hash build in every stage-2 task can run, and the phased scheduler starts handing out store_sales splits.",
+      "Probe drivers can only start once their task's hash table is built. The coordinator held their splits back until now, so they never sat blocked on a thread.");
+    if (sid === "2") E("tstage", "Stage 2 finished: every split is scanned and every task has flushed its last pages. Stage-1 tasks can now finish their aggregation.",
+      "The final aggregation has been folding pages in as they arrived, but it can only emit a group once it has seen all of its input.");
+    if (sid === "1") E("tstage", "Stage 1 finished; the output task in stage 0 sends the rows to the client.");
+    if (sid === "0") queryDone();
+  }
+  function queryDone() {
+    st.qstatus = "finished"; st.over = true;
+    E("query-done", `Query finished at tick ${st.tick}${st.attempt ? `, on attempt ${st.attempt}` : ""}.`);
+  }
+  function wasteTask(t, state) {
+    for (const d of drv(t)) { if (d.state === "finished") d.wasted = true; else d.state = state; }
+  }
+  function queryFailure(reason) {
+    for (const t of Object.values(st.tasks)) if (cur(t) && (t.status === "running" || t.status === "finished")) { wasteTask(t, "cancelled"); if (t.status === "running") t.status = "cancelled"; }
+    for (const W of Object.values(st.workers)) W.threads = [null, null];
+    if (cfg.policy === "QUERY" && st.attempt < 3) {
+      st.qstatus = "retrying"; st.restartAt = st.tick + 1;
+      E("retry", `Query attempt ${st.attempt} failed: ${reason}. retry-policy=QUERY starts the whole query again.`,
+        "With QUERY, the coordinator re-runs the query from the beginning, up to query-retry-attempts (4) times. It is meant for many short queries, where re-running is cheaper than spooling every exchange.");
+    } else {
+      st.qstatus = "failed"; st.over = true;
+      E("abort", `Query failed: ${reason}.`,
+        cfg.policy === "NONE" ? "The default retry-policy is NONE. Pages only ever lived in memory buffers between tasks, so there is nothing to restart one task from: the error goes back to the client, which can run the query again." : "The retry limit was reached.");
+    }
+  }
+  function retryTask(t, why) {
+    t.status = "failed";
+    const others = alive().filter((w) => w !== t.worker);
+    const pool = others.length ? others : alive();
+    const load = (w) => Object.values(st.drivers).filter((d) => { const x = st.tasks[d.task]; return x.worker === w && x.status === "running" && cur(x) && !TERMINAL.includes(d.state); }).length;
+    const w = [...pool].sort((a, b) => load(a) - load(b) || a.localeCompare(b))[0];
+    const nt = newTask(t.stage, t.part, w, t.att + 1, [...t.splits]);
+    const work = nt.splits.length ? `its ${plural(nt.splits.length, "split")} (${nt.splits.map((s) => "s" + s).join(", ")})` : "its work";
+    E("retry", `Task ${t.id} is retried as ${nt.id} on ${w}. It redoes ${work}${t.stage === "2" ? " and rebuilds its hash table from the spooled item data" : ""}.`, why);
+  }
+  function failDriver(w) {
+    const pool = Object.values(st.drivers).filter((d) => d.kind === "probe" && !TERMINAL.includes(d.state) && st.tasks[d.task].worker === w && cur(st.tasks[d.task]) && st.tasks[d.task].status === "running");
+    const d = pool.sort((a, b) => b.cpu - a.cpu || a.id - b.id)[0];
+    if (!d) return;
+    const t = st.tasks[d.task];
+    d.state = "failed";
+    E("fail", `Driver ${d.label} in task ${t.id} on ${w} threw an exception after ${plural(d.cpu, "quantum")}.`, "");
+    if (fte) { wasteTask(t, "cancelled"); d.state = "failed"; retryTask(t, "Only this task runs again. Every split it owned is redone, even ones it had finished, because the task's output is committed only when the whole task succeeds. Other tasks keep running."); }
+    else queryFailure(`task ${t.id} failed`);
+  }
+  function loseWorker(w) {
+    const W = st.workers[w];
+    W.alive = false; W.lostAt = st.tick; W.threads = [null, null];
+    const ts = Object.values(st.tasks).filter((t) => t.worker === w && cur(t) && t.status === "running");
+    const fin = Object.values(st.tasks).filter((t) => t.worker === w && cur(t) && t.status === "finished");
+    for (const t of ts) wasteTask(t, "lost");
+    E("exec-lost", `Worker ${w} is gone: it stopped answering. ${ts.length ? `Running tasks on it: ${ts.map((t) => t.id).join(", ")}.` : ""}`, "");
+    if (!fte) { queryFailure(`tasks on ${w} are unreachable (REMOTE_HOST_GONE)`); return; }
+    for (const t of ts) retryTask(t, once("lostfte", `The lost task's input is still in exchange storage, so another worker can redo it.${fin.length ? ` Tasks that had finished on ${w} (${fin.map((x) => x.id).join(", ")}) are safe: their output was already spooled.` : ""}`));
+  }
+  const api = { failDriver, loseWorker };
+
+  function tick() {
+    st.tick++;
+    done = [];
+    if (st.restartAt === st.tick) { st.restartAt = null; startAttempt(); }
+    cfg.inject?.(st.tick, api);
+    if (st.over) return;
+    if (st.qstatus !== "running") return;
+    const ran = [];
+    for (const w of WORKERS) {
+      const W = st.workers[w];
+      if (!W.alive) { W.threads = [null, null]; continue; }
+      const c = Object.values(st.drivers).filter((d) => st.tasks[d.task].worker === w && runnable(d)).sort((a, b) => a.cpu - b.cpu || a.id - b.id);
+      W.threads = [c[0]?.id ?? null, c[1]?.id ?? null];
+      W.threads.forEach((id, k) => { if (id != null) runDriver(st.drivers[id], W, k); });
+      const blocked = Object.values(st.drivers).filter((d) => st.tasks[d.task].worker === w && cur(st.tasks[d.task]) && st.tasks[d.task].status === "running" && !TERMINAL.includes(d.state) && !runnable(d) && !W.threads.includes(d.id)).length;
+      ran.push(`${w}: ${W.threads.map((id) => (id == null ? "idle" : `${st.drivers[id].label} (${st.tasks[st.drivers[id].task].id})`)).join(", ")}${c.length > 2 ? `, ${c.length - 2} more waiting` : ""}${blocked ? `, ${blocked} blocked` : ""}`);
+    }
+    E("run", ran.join(" · "), once("run", "Each worker has a fixed pool of threads, 2 here, shared by every driver of every task on it. Each quantum a thread takes the runnable driver that has used the least CPU so far, so a new or short driver gets a turn quickly. Blocked drivers take no thread."));
+    if (done.length) {
+      const txt = done.map((d) => `${d.label} in ${st.tasks[d.task].id}`).join(", ");
+      const hasFinal = done.some((d) => d.kind === "final");
+      E("ok", `Drivers finished: ${txt}.`, hasFinal || fte ? "" : once("pages", "Probe drivers push partial aggregates as pages, hash-partitioned to the stage-1 tasks, while they run. An A driver wakes up once a few pages are queued and folds them in."));
+    }
+    checkTasks();
+    if (!fte && !st.over) assignSplits();
+  }
+  function summary() {
+    const q = st.gantt.reduce((n, g) => n + g.end - g.start, 0);
+    const wasted = st.gantt.filter((g) => { const d = st.drivers[g.driver]; return d.wasted || d.state === "failed" || d.state === "lost" || d.state === "cancelled" || d.qa < st.attempt; })
+      .reduce((n, g) => n + g.end - g.start, 0);
+    E("summary", `${st.qstatus === "finished" ? "Done" : "Failed"} at tick ${st.tick}: ${q} quanta of driver work${wasted ? `, ${wasted} of them thrown away` : ""}.`, "");
+  }
+  const snap = () => { steps.push({ tick: st.tick, events: ev, st: structuredClone(st) }); ev = []; };
+
+  startAttempt(); snap();
+  while (!st.over && st.tick < 60) { tick(); if (st.over) summary(); snap(); }
+  return steps;
+}
+
+// ---------------------------------------------------------------- view
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const KIND = {
+  job: ["job", ""], stage: ["stage submitted", ""], wait: ["waiting", ""], launch: ["tasks launched", ""], ok: ["finished", "good"],
+  done: ["stage complete", "good"], "job-done": ["job finished", "good"], fail: ["failure", "bad"], abort: ["failed", "bad"],
+  "exec-lost": ["node lost", "bad"], unreg: ["shuffle output lost", "bad"], ess: ["shuffle service", "acc"], fetch: ["fetch failed", "bad"],
+  spec: ["speculation", "acc"], kill: ["task killed", "acc"], summary: ["summary", "acc"],
+  query: ["query", ""], run: ["threads this quantum", ""], split: ["splits", ""], tstage: ["stage finished", "good"], "query-done": ["query finished", "good"],
+  retry: ["retry", "acc"], spool: ["spooled", "acc"],
+};
+const LEDE = {
+  spark: "Step through one Spark job on a three-executor cluster: how the driver cuts it into stages, hands tasks to cores, records where shuffle files live, and recovers when a task, an executor or a slow disk goes wrong.",
+  trino: "Step through one Trino query on three workers: how the coordinator creates every stage's tasks at once, hands out splits, and how each worker's threads time-slice the drivers, and what each retry policy does when a task or a worker fails.",
+};
+
+const view = { engine: "spark", scen: SCENARIOS[0], opts: {}, steps: [], i: 0, timer: null, maxTick: 0 };
+
+function load(scen, keepTick) {
+  view.scen = scen;
+  view.engine = scen.engine;
+  const cfg = scen.build(view.opts);
+  view.steps = scen.engine === "trino" ? simulateTrino(cfg) : simulate(cfg);
+  view.maxTick = view.steps.at(-1).tick;
+  let i = 0;
+  if (keepTick != null) view.steps.forEach((s, k) => { if (s.tick <= keepTick) i = k; });
+  view.i = i;
+  $("scrub").max = view.steps.length - 1;
+  renderScenario();
+  render();
+}
+
+function renderScenario() {
+  const s = view.scen, eng = view.engine;
+  for (const b of document.querySelectorAll("[data-engine]")) b.setAttribute("aria-pressed", String(b.dataset.engine === eng));
+  for (const r of document.querySelectorAll("[data-for]")) r.hidden = r.dataset.for !== eng;
+  $("lede").textContent = LEDE[eng];
+  $("dag-h").textContent = eng === "trino" ? "Stages, tasks and drivers" : "Stages";
+  $("dag-sub").textContent = eng === "trino" ? "B build · I/P one driver per split · A final agg · O output" : "one square per partition; a square fills when its output exists";
+  $("cluster-sub").textContent = eng === "trino" ? "coordinator + 3 workers × 2 threads" : "3 executors × 2 cores = 6 task slots";
+  $("tl-h").textContent = eng === "trino" ? "Worker threads over time" : "Task slots over time";
+  $("tl-sub").textContent = eng === "trino" ? "each row is one worker thread; one column is one quantum" : "each row is one executor core; one column is one tick";
+  $("scen-list").innerHTML = SCENARIOS.filter((x) => x.engine === eng).map((x) => `<button class="scen-btn" role="tab" id="tab-${x.id}" aria-selected="${x === s}" data-scen="${x.id}"><b>${esc(x.name)}</b><span>${esc(x.short)}</span></button>`).join("");
+  $("scen-blurb").textContent = s.blurb;
+  $("scen-code").textContent = typeof s.code === "function" ? s.code(view.opts) : s.code;
+  $("scen-opts").innerHTML = s.opts.map((o) => o.type === "select"
+    ? `<label class="opt"><span class="mono">${esc(o.label)}</span><select id="opt-${o.id}" data-opt="${o.id}">${o.choices.map((c) => `<option ${view.opts[o.id] === c ? "selected" : ""}>${c}</option>`).join("")}</select></label>`
+    : `<label class="opt"><input type="checkbox" id="opt-${o.id}" data-opt="${o.id}" ${view.opts[o.id] ? "checked" : ""}>${esc(o.label)}</label>`).join("");
+  renderLegend();
+}
+
+function render() {
+  const step = view.steps[view.i];
+  const st = step.st;
+  $("scrub").value = view.i;
+  $("where").innerHTML = `step <b>${view.i + 1}</b>/${view.steps.length} · tick <b>${st.tick}</b>`;
+  $("b-back").disabled = $("b-reset").disabled = view.i === 0;
+  $("b-next").disabled = view.i === view.steps.length - 1;
+  if (st.engine === "trino") { renderTrinoDag(st); renderTrinoCluster(st); renderTrinoTimeline(st); }
+  else { renderDag(st); renderCluster(st); renderTimeline(st); }
+  renderStory(step);
+}
+
+// ---- spark views
+function cellState(st, s, p) {
+  const tasks = Object.values(st.tasks).filter((t) => t.stage === s.id && t.part === p);
+  const running = tasks.filter((t) => t.status === "running");
+  if (s.shuffle != null) {
+    const ex = st.outputs[s.shuffle][p];
+    if (ex) return { cls: st.execs[ex].alive ? "done" : "ess", sub: ex };
+    if (st.lost[`${s.id}:${p}`] && !running.length && !tasks.some((t) => t.status === "pending")) return { cls: "lost", sub: "lost" };
+  } else if (s.results[p]) return { cls: "done", sub: "drv" };
+  if (running.length > 1) return { cls: "run2", sub: "×2" };
+  if (running.length) return { cls: "run", sub: running[0].exec };
+  if (tasks.some((t) => t.status === "pending")) return { cls: "queued", sub: "queue" };
+  if (st.lost[`${s.id}:${p}`]) return { cls: "lost", sub: "lost" };
+  return { cls: "", sub: "" };
+}
+function stageChip(st, s) {
+  const lastJob = [...st.jobs].reverse().find((j) => j.status !== "idle");
+  if (lastJob && lastJob.id > 0 && lastJob.skipped.includes(s.id)) return `<span class="chip">skipped by job ${lastJob.id}</span>`;
+  switch (s.status) {
+    case "idle": return `<span class="chip">not submitted</span>`;
+    case "waiting": return `<span class="chip">waiting for parents</span>`;
+    case "running": return `<span class="chip running">running${s.attempt ? ` · attempt ${s.attempt}` : ""}</span>`;
+    case "complete": return `<span class="chip complete">complete</span>`;
+    case "partial": return `<span class="chip bad">outputs lost</span>`;
+    case "failed": return `<span class="chip bad">attempt ${s.attempt} failed</span>`;
+    case "aborted": return `<span class="chip bad">aborted</span>`;
+  }
+  return "";
+}
+function stageCard(st, id) {
+  const s = st.stages[id];
+  if (!s) return "";
+  const cells = [...Array(s.parts).keys()].map((p) => {
+    const c = cellState(st, s, p);
+    return `<div class="cell ${c.cls}" title="${id} partition ${p}${c.sub ? ": " + c.sub : ""}">p${p}<i>${c.sub || "&nbsp;"}</i></div>`;
+  }).join("");
+  const tasks = Object.values(st.tasks).filter((t) => t.stage === id).length;
+  const sub = `${s.shuffle != null ? `writes sh${s.shuffle}` : "results → driver"} · ${tasks ? `${tasks} task${tasks > 1 ? "s" : ""} created` : "no tasks yet"}`;
+  return `<div class="stage ${id} ${s.status}"><div class="top"><div class="nm"><b>${id}</b><span>${esc(s.name)}</span></div>${stageChip(st, s)}</div><div class="parts">${cells}</div><div class="stage-sub">${sub}</div></div>`;
+}
+function renderDag(st) {
+  const ids = st.stageIds;
+  const link = (lbl) => `<div class="link" aria-hidden="true"><span class="ar">→</span><span>${lbl}</span></div>`;
+  $("dag").innerHTML = `<div class="dag">
+    <div class="col">${stageCard(st, "S0")}${stageCard(st, "S1")}</div>${link("shuffle<br>sh0, sh1")}
+    <div class="col">${stageCard(st, "S2")}</div>${link("shuffle<br>sh2")}
+    <div class="col">${stageCard(st, "S3")}${ids.includes("S4") ? stageCard(st, "S4") : ""}</div></div>`;
+}
+function renderCluster(st) {
+  const jobs = st.jobs.map((j) => {
+    const chip = j.status === "running" ? '<span class="chip running">running</span>' : j.status === "done" ? '<span class="chip complete">done</span>' : j.status === "failed" ? '<span class="chip bad">failed</span>' : '<span class="chip">not started</span>';
+    const t = j.start != null ? `<span class="faint mono">t${j.start}${j.end != null ? `–t${j.end}` : ""}</span>` : "";
+    return `<div class="job"><b>Job ${j.id}</b><code>${esc(j.action)}</code>${chip}${t}</div>`;
+  }).join("");
+  const mot = Object.entries(st.outputs).map(([sh, arr]) => {
+    const sid = SHUFFLE_STAGE[sh];
+    const cells = arr.map((x, i) => {
+      if (x) return `<td class="${sid}"><span class="has" title="sh${sh}/p${i} on ${x}">${x}</span></td>`;
+      if (st.lost[`${sid}:${i}`]) return `<td><span class="gone" title="sh${sh}/p${i} lost">✕</span></td>`;
+      return `<td><span title="sh${sh}/p${i} not written yet">·</span></td>`;
+    }).join("");
+    return `<tr><th>sh${sh} <span class="faint">${sid}</span></th>${cells}</tr>`;
+  }).join("");
+  const driver = `<div class="driver"><div><div class="box-h">Driver · jobs</div><div class="jobs">${jobs}</div></div>
+    <div style="min-width:0"><div class="box-h">MapOutputTracker · which executor holds each map output</div><div class="mot-wrap"><table class="mot"><tbody>${mot}</tbody></table></div></div></div>`;
+  const execs = Object.values(st.execs).map((e) => {
+    const slots = e.slots.map((tid, k) => {
+      if (tid == null) return `<div class="slot">core ${k} · idle</div>`;
+      const t = st.tasks[tid];
+      const pct = Math.min(100, Math.round(((st.tick - t.start) / t.dur) * 100));
+      return `<div class="slot busy ${t.stage}"><span>${t.stage} p${t.part}${t.att && !t.spec ? ` · attempt ${t.att}` : ""}${t.spec ? " · copy" : ""}</span><div class="prog" aria-hidden="true"><i style="width:${pct}%"></i></div></div>`;
+    }).join("");
+    const files = e.disk.map((f) => `<span class="file ${SHUFFLE_STAGE[f.slice(2, f.indexOf("/"))]}">${f}</span>`).join("");
+    let disk;
+    if (!e.alive && st.ess) disk = `<div class="disk">${files}</div><div class="disk-note">served by the node's shuffle service</div>`;
+    else if (!e.alive) disk = `<div class="disk-note">disk gone with the executor</div>`;
+    else disk = files ? `<div class="disk">${files}</div>` : `<div class="disk-note">no shuffle files yet</div>`;
+    const stat = e.alive ? '<span class="chip complete">alive</span>' : `<span class="chip bad">lost at t${e.lostAt}</span>`;
+    return `<div class="exec${e.alive ? "" : " dead"}"><div class="exec-h"><b>${e.id}</b>${stat}</div>${e.alive ? slots : ""}<div class="box-h" style="margin:2px 0 0">Local disk</div>${disk}</div>`;
+  }).join("");
+  $("cluster").innerHTML = driver + execs;
+}
+function renderTimeline(st) {
+  const W = 30, ticks = view.maxTick + 1;
+  const rows = [];
+  for (const e of Object.values(st.execs)) for (let k = 0; k < 2; k++) {
+    const blocks = st.gantt.filter((g) => g.exec === e.id && g.slot === k).map((g) => {
+      const end = g.end ?? st.tick;
+      const w = Math.max((end - g.start) * W - 2, 6);
+      const label = w >= 52 ? `${g.stage} p${g.part}` : w >= 22 ? `p${g.part}` : "";
+      const st2 = g.status === "ok" ? "" : g.status;
+      const tip = `${g.stage} p${g.part}${g.spec ? " (speculative)" : ""}: ticks ${g.start}–${end}${g.status !== "ok" && g.status !== "run" ? `, ${g.status}` : ""}`;
+      return `<div class="blk ${g.stage} ${st2}${g.spec ? " spec" : ""}" style="left:${g.start * W + 1}px;width:${w}px" title="${tip}">${label}</div>`;
+    }).join("");
+    const dead = e.lostAt != null ? `<div class="dead-zone" style="left:${e.lostAt * W}px;right:0" title="${e.id} lost"></div>` : "";
+    rows.push(`<div class="tl-row"><div class="lab">${e.id} · core ${k}</div><div class="lane">${dead}${blocks}</div></div>`);
+  }
+  drawTimeline(rows, ticks, W, st.tick);
+}
+function drawTimeline(rows, ticks, W, tick) {
+  const axis = Array.from({ length: ticks }, (_, t) => `<span style="left:${t * W}px">${t}</span>`).join("");
+  $("tl").style.width = 76 + ticks * W + 10 + "px";
+  $("tl").innerHTML = `<div class="axis">${axis}</div>${rows.join("")}<div class="cursor" style="left:${76 + tick * W}px" title="tick ${tick}"></div>`;
+}
+
+// ---- trino views
+function dState(st, d) {
+  const t = st.tasks[d.task];
+  if (d.state === "finished") return d.wasted || d.qa < st.attempt ? "killed" : "done";
+  if (d.state === "failed") return "failed";
+  if (d.state === "lost") return "lost";
+  if (d.state === "cancelled" || d.qa < st.attempt) return "killed";
+  if (Object.values(st.workers).some((w) => w.threads.includes(d.id))) return "run";
+  if (t.status !== "running") return "killed";
+  const ok = { item: true, build: st.stages["3"]?.status === "finished", probe: t.drivers.some((id) => st.drivers[id].kind === "build" && st.drivers[id].state === "finished"),
+    final: st.fte || t.queue >= PAGE_BATCH || st.stages["2"]?.status === "finished", output: st.stages["1"]?.status === "finished" }[d.kind];
+  return ok ? "ready" : "blocked";
+}
+function blockReason(st, d) {
+  return { build: "waiting for the item broadcast", probe: "waiting for this task's hash table", final: "fewer than 3 pages queued", output: "waiting for stage 1" }[d.kind] || "";
+}
+function renderTrinoDag(st) {
+  const link = (a) => {
+    const how = a === "3" ? "broadcast" : a === "2" ? "hash-partitioned" : "gather";
+    return `<div class="tlink" aria-hidden="true">↓ ${how} · <b>${st.fte ? "spooled to exchange storage" : "pages stream in memory"}</b></div>`;
+  };
+  const card = (sid) => {
+    const s = st.stages[sid], meta = T_STAGES[sid];
+    const chip = s.status === "running" ? '<span class="chip running">running</span>' : s.status === "finished" ? '<span class="chip complete">finished</span>'
+      : st.qstatus === "failed" && s.tasks.length ? '<span class="chip bad">cancelled</span>' : `<span class="chip">${st.fte ? "waits for stage " + (+sid + 1) : "not scheduled"}</span>`;
+    const tasks = s.history.map((k) => {
+      const t = st.tasks[k];
+      const chips = t.drivers.map((id) => {
+        const d = st.drivers[id], ds = dState(st, d);
+        const tip = `${d.label}: ${ds}${ds === "blocked" ? ` (${blockReason(st, d)})` : ""}, ${d.cpu} quanta${d.need ? ` of ${d.need}` : ""}`;
+        return `<span class="dchip ${ds}" title="${esc(tip)}">${d.label}</span>`;
+      }).join("");
+      const failed = t.status === "failed" || (st.qstatus === "failed" && t.status === "cancelled");
+      const tchip = t.status === "finished" ? '<span class="chip complete">done</span>' : failed ? '<span class="chip bad">failed</span>' : t.status === "cancelled" ? '<span class="chip">cancelled</span>' : "";
+      const extra = sid === "1" && !st.fte && t.status === "running" ? `<span class="faint" style="font-size:11.5px">${t.queue} page${t.queue === 1 ? "" : "s"} queued</span>` : "";
+      return `<div class="ttask ${failed ? "failed" : t.status}"><div class="th"><span>task ${t.id}</span><span class="w">${t.worker}</span>${tchip}</div><div class="drivers">${chips || '<span class="faint" style="font-size:11.5px">no splits yet</span>'}</div>${extra}</div>`;
+    }).join("");
+    return `<div class="tstage ${meta.cls} ${s.status}"><div class="nm"><b>Stage ${sid}</b><span>${esc(meta.name)}</span>${chip}</div><div class="ttasks">${tasks || '<span class="faint" style="font-size:12.5px">no tasks yet</span>'}</div></div>`;
+  };
+  $("dag").innerHTML = `<div class="tdag">${T_ORDER.map((sid, i) => card(sid) + (i < 3 ? link(sid) : "")).join("")}</div>`;
+}
+function renderTrinoCluster(st) {
+  const qchip = { running: '<span class="chip running">running</span>', finished: '<span class="chip complete">finished</span>', failed: '<span class="chip bad">failed</span>', retrying: '<span class="chip bad">restarting</span>' }[st.qstatus];
+  const splits = (sid) => {
+    const left = st.unassigned[sid];
+    const cls = sid === "3" ? "S1" : "S0";
+    const chips = left.length ? left.map((s) => `<span class="split ${cls}">s${s}</span>`).join("") : `<span class="faint">${st.fte ? "bound to tasks" : st.stages["3"].status !== "finished" && sid === "2" ? "" : "all assigned"}</span>`;
+    return `<div class="split-row"><span class="faint">${sid === "3" ? "item" : "store_sales"}</span>${chips}</div>`;
+  };
+  const coord = `<div class="driver"><div><div class="box-h">Coordinator · query</div><dl class="kv">
+      <dt>state</dt><dd>${qchip}${st.attempt ? ` attempt ${st.attempt}` : ""}</dd><dt>retry-policy</dt><dd>${st.policy}</dd>
+      <dt>exchanges</dt><dd>${st.fte ? "spooled" : "in-memory, streaming"}</dd><dt>execution</dt><dd>${st.fte ? "stage by stage" : "phased"}</dd></dl></div>
+    <div style="min-width:0"><div class="box-h">Splits not yet handed out</div>${splits("3")}${splits("2")}
+      ${st.fte ? `<div class="box-h" style="margin-top:8px">Exchange storage</div><div class="disk">${st.spool.map((id) => `<span class="file S${{ 3: 1, 2: 0, 1: 2, 0: 3 }[id[0]]}">${id}</span>`).join("") || '<span class="disk-note">nothing committed yet</span>'}</div>` : ""}</div></div>`;
+  const workers = Object.values(st.workers).map((W) => {
+    const mine = Object.values(st.drivers).filter((d) => st.tasks[d.task].worker === W.id && st.tasks[d.task].qa === st.attempt);
+    const states = mine.map((d) => dState(st, d));
+    const ready = states.filter((s) => s === "ready").length, blocked = states.filter((s) => s === "blocked").length;
+    const threads = W.threads.map((id, k) => {
+      if (id == null) return `<div class="slot">thread ${k} · idle</div>`;
+      const d = st.drivers[id], t = st.tasks[d.task];
+      const pct = d.need ? Math.min(100, Math.round((d.progress / d.need) * 100)) : 100;
+      return `<div class="slot busy ${T_STAGES[t.stage].cls}"><span>${d.label} · task ${t.id}</span><div class="prog" aria-hidden="true"><i style="width:${pct}%"></i></div></div>`;
+    }).join("");
+    const tasks = [...new Set(mine.map((d) => st.tasks[d.task]))].filter((t) => t.status === "running").map((t) => `<span class="file ${T_STAGES[t.stage].cls}">${t.id}</span>`).join("");
+    const stat = W.alive ? `<span class="chip complete">alive${W.speed < 1 ? " · slow" : ""}</span>` : `<span class="chip bad">lost at t${W.lostAt}</span>`;
+    return `<div class="exec${W.alive ? "" : " dead"}"><div class="exec-h"><b>${W.id}</b>${stat}</div>${W.alive ? threads : ""}
+      ${W.alive ? `<div class="disk-note">${ready} runnable waiting · ${blocked} blocked</div>` : '<div class="disk-note">its tasks and their memory buffers are gone</div>'}
+      <div class="box-h" style="margin:2px 0 0">Running tasks</div><div class="disk">${tasks || '<span class="disk-note">none</span>'}</div></div>`;
+  }).join("");
+  $("cluster").innerHTML = coord + workers;
+}
+function renderTrinoTimeline(st) {
+  const W = 30, ticks = view.maxTick + 1;
+  const rows = [];
+  for (const w of Object.values(st.workers)) for (let k = 0; k < 2; k++) {
+    const blocks = st.gantt.filter((g) => g.w === w.id && g.k === k).map((g) => {
+      const d = st.drivers[g.driver];
+      const ds = dState(st, d);
+      const cls = ds === "done" ? "" : ds === "run" || ds === "ready" || ds === "blocked" ? "run" : ds;
+      const width = Math.max((g.end - g.start) * W - 2, 6);
+      return `<div class="blk ${T_STAGES[g.stage].cls} ${cls}" style="left:${g.start * W + 1}px;width:${width}px" title="${esc(`${d.label} in task ${st.tasks[d.task].id}: ticks ${g.start}–${g.end}, ${ds}`)}">${width >= 18 ? g.label : ""}</div>`;
+    }).join("");
+    const dead = w.lostAt != null ? `<div class="dead-zone" style="left:${w.lostAt * W}px;right:0" title="${w.id} lost"></div>` : "";
+    rows.push(`<div class="tl-row"><div class="lab" title="${w.id}, thread ${k}">${w.id} · t${k}</div><div class="lane">${dead}${blocks}</div></div>`);
+  }
+  drawTimeline(rows, ticks, W, st.tick);
+}
+
+// ---- shared
+function renderStory(step) {
+  const trino = step.st.engine === "trino";
+  $("story-h").textContent = view.i === 0 ? (trino ? "Tick 0: the query is submitted" : "Tick 0: the action is called") : `Tick ${step.tick}`;
+  $("events").innerHTML = step.events.map((e) => {
+    const [tag, tone] = KIND[e.kind] || [e.kind, ""];
+    return `<div class="ev ${tone ? "k-" + tone : ""}"><span class="tag">${esc(tag)}</span><div class="txt">${esc(e.text)}</div>${e.why ? `<div class="why">${esc(e.why)}</div>` : ""}</div>`;
+  }).join("");
+  $("log").innerHTML = view.steps.map((s, k) => {
+    const main = s.events.find((e) => KIND[e.kind]?.[1] === "bad") || s.events.find((e) => !["launch", "ok", "run"].includes(e.kind)) || s.events.find((e) => e.kind !== "run") || s.events[0];
+    return `<button data-step="${k}" class="${k === view.i ? "cur" : ""}"><span class="t">t${s.tick}</span><span class="x">${esc(main ? main.text : "")}</span></button>`;
+  }).join("");
+  const cur = $("log").querySelector(".cur");
+  if (cur) { const L = $("log"); const top = cur.offsetTop - L.offsetTop; if (top < L.scrollTop || top > L.scrollTop + L.clientHeight - 30) L.scrollTop = top - 60; }
+}
+function renderLegend() {
+  const sw = (cls, txt) => `<span class="sw"><i class="blk ${cls}"></i>${txt}</span>`;
+  $("legend").innerHTML = view.engine === "trino"
+    ? sw("S1", "stage 3 item") + sw("S0", "stage 2 sales") + sw("S2", "stage 1 agg") + sw("S3", "stage 0 output") + sw("S0 run", "driver not finished") + sw("failed", "failed") + sw("lost", "lost with worker") + sw("killed", "work thrown away")
+    : ["S0", "S1", "S2", "S3", "S4"].map((s) => sw(s, s)).join("") + sw("S2 run", "running") + sw("S2 spec", "speculative copy") + sw("failed", "failed") + sw("fetchfail", "FetchFailed") + sw("lost", "died with executor") + sw("killed", "killed");
+}
+
+// ---------------------------------------------------------------- controls
+function go(i) { view.i = Math.max(0, Math.min(view.steps.length - 1, i)); render(); }
+function stop() { clearInterval(view.timer); view.timer = null; $("b-play").textContent = "Play"; }
+function play() {
+  if (view.timer) return stop();
+  if (view.i === view.steps.length - 1) go(0);
+  $("b-play").textContent = "Pause";
+  view.timer = setInterval(() => { if (view.i >= view.steps.length - 1) return stop(); go(view.i + 1); }, 1100);
+}
+function pickScenario(id, fromHash) {
+  const s = SCENARIOS.find((x) => x.id === id) || SCENARIOS[0];
+  stop();
+  view.opts = Object.fromEntries(s.opts.map((o) => [o.id, o.def]));
+  load(s);
+  if (!fromHash) { try { history.replaceState(null, "", "#" + s.id); } catch (e) { /* ignore */ } }
+}
+$("b-next").onclick = () => { stop(); go(view.i + 1); };
+$("b-back").onclick = () => { stop(); go(view.i - 1); };
+$("b-reset").onclick = () => { stop(); go(0); };
+$("b-play").onclick = play;
+$("scrub").oninput = (e) => { stop(); go(+e.target.value); };
+$("scen-list").onclick = (e) => { const b = e.target.closest("[data-scen]"); if (b) pickScenario(b.dataset.scen); };
+for (const b of document.querySelectorAll("[data-engine]")) b.onclick = () => { if (b.dataset.engine !== view.engine) pickScenario(SCENARIOS.find((x) => x.engine === b.dataset.engine).id); };
+$("scen-opts").onchange = (e) => {
+  const k = e.target.dataset.opt; if (!k) return;
+  view.opts[k] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+  stop(); load(view.scen, view.steps[view.i].tick);
+};
+$("log").onclick = (e) => { const b = e.target.closest("[data-step]"); if (b) { stop(); go(+b.dataset.step); } };
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest("input, textarea, select")) return;
+  if (e.key === "ArrowRight") { stop(); go(view.i + 1); e.preventDefault(); }
+  else if (e.key === "ArrowLeft") { stop(); go(view.i - 1); e.preventDefault(); }
+  else if (e.key === " " && !e.target.closest("button")) { play(); e.preventDefault(); }
+});
+window.addEventListener("hashchange", () => pickScenario(location.hash.slice(1), true));
+pickScenario(location.hash.slice(1), true);
+})();
+</script>
