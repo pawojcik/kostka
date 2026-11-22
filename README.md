@@ -1,4 +1,4 @@
-# kostka — spec
+# kostka
 
 *kostka* is Polish for a small cube (and a die): the OLAP cube, kept small enough to
 learn from.
