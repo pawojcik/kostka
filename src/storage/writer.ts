@@ -59,7 +59,10 @@ export class TableWriter {
 
   static async open(catalog: Catalog, store: FileStore, table: string, mode: WriteMode, columns: readonly ColumnDef[] | null = null, detail = "", compact = true): Promise<TableWriter> {
     const exists = catalog.tableExists(table);
-    if (mode === "create" && exists) throw new TableExistsError(`table '${table}' already exists`);
+    if (mode === "create" && exists) {
+      const old = catalog.loadTable(table).name;
+      throw new TableExistsError(old === table ? `table '${table}' already exists` : `table '${table}' already exists as '${old}' (names ignore case)`);
+    }
     if (mode === "append" && !exists) throw new TableNotFoundError(`table '${table}' does not exist`);
     if (mode === "replace" && !exists) mode = "create";
     const w = new TableWriter(catalog, store, table, mode, detail, compact);
@@ -104,14 +107,24 @@ export class TableWriter {
     while (this.buffer.length >= this.fileRows) await this.write(this.buffer.splice(0, this.fileRows));
   }
 
-  /** Rows as objects: unknown keys are an error, missing keys are null. */
+  /** Rows as objects, keys matched to columns ignoring case: unknown keys are an
+   * error, missing keys are null. */
   async addObjects(rows: Iterable<Record<string, unknown>>): Promise<void> {
-    const names = this.names, known = new Set(names);
+    const names = this.names;
+    const at = new Map(names.map((n, i) => [n.toLowerCase(), i]));
     const out: unknown[][] = [];
     for (const r of rows) {
-      const unknown = Object.keys(r).filter((k) => !known.has(k));
+      const row: unknown[] = names.map(() => null);
+      const unknown: string[] = [];
+      const set = new Set<number>();
+      for (const [k, v] of Object.entries(r)) {
+        const i = at.get(k.toLowerCase());
+        if (i === undefined) unknown.push(k);
+        else if (set.has(i)) throw new SchemaError(`column '${names[i]}' is given twice (names ignore case)`);
+        else (set.add(i), (row[i] = v ?? null));
+      }
       if (unknown.length) throw new SchemaError(`unknown column(s) ${unknown.map((k) => `'${k}'`).join(", ")} for table '${this.table}'`);
-      out.push(names.map((n) => r[n] ?? null));
+      out.push(row);
     }
     await this.add(out);
   }

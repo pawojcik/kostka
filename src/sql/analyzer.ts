@@ -16,6 +16,11 @@
 //
 // Snapshots: each table is read at one snapshot per query, so every scan of a table
 // (a self-join, a CTE used twice) sees the same data.
+//
+// Names are case-insensitive and case-preserving: `select A from FOO f where F.b > 1`
+// finds table foo and its columns a and b, and the output column keeps the spelling
+// the catalog has (`a`) unless it is aliased. Identifiers are ASCII, so lowercasing
+// is enough to compare them.
 
 import { AnalysisError, type Span } from "../core/errors.ts";
 import {
@@ -46,7 +51,16 @@ interface Relation {
   scope: Field[];
 }
 
+/** Ctes by lowercased name. */
 type Ctes = ReadonlyMap<string, { cte: Cte; outer: Ctes }>;
+
+/** The key a name is compared by. */
+const lc = (name: string): string => name.toLowerCase();
+
+/** Whether two names (or qualifiers) are the same name. */
+function same(a: string | null | undefined, b: string | null | undefined): boolean {
+  return a === b || (a != null && b != null && lc(a) === lc(b));
+}
 
 /** How a bound expression may use aggregates. */
 type AggMode = "forbidden" | "allowed";
@@ -77,10 +91,10 @@ class Analyzer {
     let ctes: Ctes = outer;
     for (const cte of q.ctes) {
       const next = new Map(ctes);
-      if (next.has(cte.name) && q.ctes.filter((c) => c.name === cte.name).length > 1) {
+      if (next.has(lc(cte.name)) && q.ctes.filter((c) => same(c.name, cte.name)).length > 1) {
         this.fail(`CTE '${cte.name}' is defined twice`, cte.span);
       }
-      next.set(cte.name, { cte, outer: ctes }); // a CTE sees the ones before it
+      next.set(lc(cte.name), { cte, outer: ctes }); // a CTE sees the ones before it
       ctes = next;
     }
     return this.select(q.body, ctes);
@@ -105,7 +119,7 @@ class Analyzer {
     let having: Expr | null = null;
     if (s.having) {
       const aliases = new Map<string, Expr | null>();
-      for (const it of items) if (it.alias !== null) aliases.set(it.alias, aliases.has(it.alias) ? null : unalias(it.expr));
+      for (const it of items) if (it.alias !== null) aliases.set(lc(it.alias), aliases.has(lc(it.alias)) ? null : unalias(it.expr));
       this.selectAliases = aliases;
       try {
         having = this.bind(s.having, scope, "allowed", "HAVING");
@@ -126,7 +140,7 @@ class Analyzer {
         return { output: k - 1, ...dir };
       }
       if (e.kind === "column" && e.table === null) {
-        const hits = items.flatMap((it, i) => (it.name === e.name && (it.alias !== null || !this.inScope(e.name, scope)) ? [i] : []));
+        const hits = items.flatMap((it, i) => (same(it.name, e.name) && (it.alias !== null || !this.inScope(e.name, scope)) ? [i] : []));
         if (hits.length > 1) this.fail(`ORDER BY ${e.name} is ambiguous: the select list has ${hits.length} columns named so`, e.span);
         if (hits.length === 1) return { output: hits[0]!, ...dir };
       }
@@ -233,7 +247,7 @@ class Analyzer {
   }
 
   private inScope(name: string, scope: readonly Field[]): boolean {
-    return scope.some((f) => f.name === name);
+    return scope.some((f) => same(f.name, name));
   }
 
   /** The scope field an id has, for qualifiers of passed-through columns. */
@@ -255,7 +269,7 @@ class Analyzer {
       return unalias(e);
     }
     if (g.kind === "column" && g.table === null && !this.inScope(g.name, scope)) {
-      const hit = items.find((it) => it.alias === g.name);
+      const hit = items.find((it) => same(it.alias, g.name));
       if (hit) {
         if (containsAgg(hit.expr)) this.fail(`GROUP BY ${g.name} refers to an aggregate`, g.span);
         return unalias(hit.expr);
@@ -268,7 +282,7 @@ class Analyzer {
     const out: SelectItemBound[] = [];
     for (const it of list) {
       if (it.expr === null) {
-        const cols = it.star === null ? scope : scope.filter((f) => f.qualifier === it.star);
+        const cols = it.star === null ? scope : scope.filter((f) => same(f.qualifier, it.star));
         if (it.star && !cols.length) this.fail(`no table named '${it.star}' in FROM`, it.span);
         for (const f of cols) out.push({ expr: f.ref(), alias: null, name: f.name, qualifier: f.qualifier });
         continue;
@@ -286,7 +300,7 @@ class Analyzer {
   // --- FROM ------------------------------------------------------------------------
 
   private checkAliases(from: FromItem): void {
-    const seen = new Map<string, FromItem>();
+    const seen = new Map<string, string>();
     const visit = (f: FromItem) => {
       if (f.kind === "join") {
         visit(f.left);
@@ -294,10 +308,12 @@ class Analyzer {
         return;
       }
       const name = f.kind === "table" ? f.alias ?? f.name : f.alias;
-      if (seen.has(name)) {
-        this.fail(`'${name}' appears twice in FROM; give one of them an alias (FROM t AS a JOIN t AS b ...)`, f.span);
+      const prior = seen.get(lc(name));
+      if (prior !== undefined) {
+        const twice = prior === name ? `'${name}' appears` : `'${prior}' and '${name}' (names ignore case) appear`;
+        this.fail(`${twice} twice in FROM; give one of them an alias (FROM t AS a JOIN t AS b ...)`, f.span);
       }
-      seen.set(name, f);
+      seen.set(lc(name), name);
     };
     visit(from);
   }
@@ -305,7 +321,7 @@ class Analyzer {
   private from(f: FromItem, ctes: Ctes): Relation {
     switch (f.kind) {
       case "table": {
-        const cte = ctes.get(f.name);
+        const cte = ctes.get(lc(f.name));
         if (cte && !f.asOf) {
           const rel = this.query(cte.cte.query, cte.outer);
           const names = cte.cte.columns;
@@ -340,7 +356,7 @@ class Analyzer {
   }
 
   private table(name: string, span: Span): TableMeta {
-    let meta = this.metas.get(name);
+    let meta = this.metas.get(lc(name));
     if (!meta) {
       try {
         meta = this.catalog.loadTable(name);
@@ -348,7 +364,7 @@ class Analyzer {
         if (e instanceof TableNotFoundError) this.fail(`unknown table '${name}'`, span);
         throw e;
       }
-      this.metas.set(name, meta);
+      this.metas.set(lc(name), meta);
     }
     return meta;
   }
@@ -405,13 +421,11 @@ class Analyzer {
   }
 
   private resolveColumn(e: Extract<AstExpr, { kind: "column" }>, scope: readonly Field[]): Field {
-    const hits = scope.filter((f) => f.name === e.name && (e.table === null || f.qualifier === e.table));
+    const hits = scope.filter((f) => same(f.name, e.name) && (e.table === null || same(f.qualifier, e.table)));
     const shown = e.table ? `${e.table}.${e.name}` : e.name;
     if (!hits.length) {
-      if (e.table && !scope.some((f) => f.qualifier === e.table)) this.fail(`unknown table or alias '${e.table}' in '${shown}'`, e.span);
-      const close = scope.filter((f) => f.name.toLowerCase() === e.name.toLowerCase());
-      const hint = close.length ? `; did you mean ${close.map(String).join(" or ")}?` : `; available: ${scope.map(String).join(", ") || "(none)"}`;
-      this.fail(`unknown column '${shown}'${hint}`, e.span);
+      if (e.table && !scope.some((f) => same(f.qualifier, e.table))) this.fail(`unknown table or alias '${e.table}' in '${shown}'`, e.span);
+      this.fail(`unknown column '${shown}'; available: ${scope.map(String).join(", ") || "(none)"}`, e.span);
     }
     if (hits.length > 1) {
       this.fail(`column '${shown}' is ambiguous (${hits.map(String).join(", ")}); qualify it as table.column`, e.span);
@@ -419,7 +433,7 @@ class Analyzer {
     return hits[0]!;
   }
 
-  /** While binding HAVING: the select list's aliases (null: used twice). */
+  /** While binding HAVING: the select list's aliases, lowercased (null: used twice). */
   private selectAliases: Map<string, Expr | null> | null = null;
 
   bind(e: AstExpr, scope: readonly Field[], aggs: AggMode, where = "here"): Expr {
@@ -432,8 +446,8 @@ class Analyzer {
     const sub = (x: AstExpr, mode: AggMode = aggs) => this.bind(x, scope, mode, where);
     switch (e.kind) {
       case "column": {
-        if (e.table === null && this.selectAliases?.has(e.name) && !this.inScope(e.name, scope)) {
-          const x = this.selectAliases.get(e.name);
+        if (e.table === null && this.selectAliases?.has(lc(e.name)) && !this.inScope(e.name, scope)) {
+          const x = this.selectAliases.get(lc(e.name));
           if (!x) this.fail(`${where} ${e.name} is ambiguous: the select list has several columns named so`, e.span);
           return x!;
         }

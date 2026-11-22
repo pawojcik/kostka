@@ -107,9 +107,15 @@ nulls as equal; join keys never match a null.
 
 ### Identifiers
 
-Table and column names are `[A-Za-z_][A-Za-z0-9_]*`. In SQL, keywords are
-case-insensitive and identifiers case-sensitive; `"double quotes"` allow a keyword
-as a name. `DATE` and `TIMESTAMP` are keywords only before a string or `(`, so a
+Table and column names are `[A-Za-z_][A-Za-z0-9_]*`. Keywords and names are
+case-insensitive, and names are case-preserving (as in DuckDB or Spark):
+`select A from FOO f where F.b > 1` reads table `foo` and its columns `a` and `b`,
+and the output column is called `a`, as the catalog spells it, unless aliased.
+`"double quotes"` allow a keyword as a name and ignore case too. So the catalog
+refuses a table `FOO` next to `foo` and a table with columns `id` and `ID`, and an
+append matches columns by name ignoring case (`addObjects`, CSV append). The
+catalog compares table names with `COLLATE NOCASE` under a unique index; one made
+before names ignored case that holds two such tables fails to open, naming them. `DATE` and `TIMESTAMP` are keywords only before a string or `(`, so a
 table or column can be called `date` without quotes.
 
 ### Errors

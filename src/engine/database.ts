@@ -142,15 +142,18 @@ export class Database {
   async importCsv(text: string, table: string, mode: WriteMode, columns: readonly CsvColumn[] | null = null, o: CsvOptions = {}, detail = "CSV import"): Promise<number> {
     let specs = (columns ?? inferCsv(text, o).columns).filter((c) => c.include);
     if (mode === "append" && this.tableExists(table)) {
-      const have = new Map(this.describe(table).columns.map((c) => [c.name, c.type]));
-      specs = specs.map((c) => ({ ...c, type: have.get(c.name) ?? c.type }));
+      // matched ignoring case, like every name: CSV column `ID` fills column `id`
+      const have = new Map(this.describe(table).columns.map((c) => [c.name.toLowerCase(), c.type]));
+      specs = specs.map((c) => ({ ...c, type: have.get(c.name.toLowerCase()) ?? c.type }));
     }
     const w = await this.writer(table, mode, mode === "append" ? null : specs.map((c) => [c.name, c.type] as const), detail);
     try {
       const names = w.names;
-      const unknown = specs.filter((c) => !names.includes(c.name)).map((c) => c.name);
+      const known = new Set(names.map((n) => n.toLowerCase()));
+      const unknown = specs.filter((c) => !known.has(c.name.toLowerCase())).map((c) => c.name);
       if (unknown.length) throw new SchemaError(`table '${table}' has no column(s) ${unknown.join(", ")}`);
-      const at = names.map((n) => specs.findIndex((c) => c.name === n));
+      parseColumns(specs.map((c) => [c.name, c.type] as const)); // no two CSV columns for one table column
+      const at = names.map((n) => specs.findIndex((c) => c.name.toLowerCase() === n.toLowerCase()));
       let batch: Value[][] = [];
       for (const r of csvRows(text, specs, o)) {
         batch.push(at.map((i) => (i < 0 ? null : r[i]!)));

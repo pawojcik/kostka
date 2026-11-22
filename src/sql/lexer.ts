@@ -1,5 +1,6 @@
-// Splits SQL text into tokens. Keywords are case-insensitive; identifiers are
-// case-sensitive and may be "double-quoted" to use a keyword as a name. Comments:
+// Splits SQL text into tokens. Keywords are upper-cased; identifiers are kept as
+// written (the analyzer compares them ignoring case) and may be "double-quoted" to
+// use a keyword as a name. Comments:
 // `-- to the end of the line` and `/* ... */`.
 
 import { ParseError, type Span } from "../core/errors.ts";

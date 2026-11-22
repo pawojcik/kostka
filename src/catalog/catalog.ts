@@ -71,12 +71,15 @@ export class CommitConflict extends Error {
 
 export function parseColumns(columns: readonly (readonly [string, string] | ColumnDef)[]): ColumnDef[] {
   if (!columns.length) throw new SchemaError("a table needs at least one column");
-  const seen = new Set<string>();
+  const seen = new Map<string, string>();
   return columns.map((c) => {
     const [name, type] = Array.isArray(c) ? c : [(c as ColumnDef).name, (c as ColumnDef).type];
     if (!isValidIdentifier(name)) throw new SchemaError(`invalid column name '${name}'`);
-    if (seen.has(name)) throw new SchemaError(`duplicate column '${name}'`);
-    seen.add(name);
+    const prior = seen.get(name.toLowerCase());
+    if (prior !== undefined) {
+      throw new SchemaError(prior === name ? `duplicate column '${name}'` : `duplicate column: '${prior}' and '${name}' differ only in case, and names ignore case`);
+    }
+    seen.set(name.toLowerCase(), name);
     return { name, type: parseType(type) };
   });
 }
@@ -102,6 +105,14 @@ export class Catalog implements CatalogReader {
   constructor(db: SqlDb) {
     this.db = db;
     db.exec(SCHEMA);
+    // Table names ignore case (`FOO` is `foo`). A catalog made before that may hold
+    // two names that differ only in case; it fails to open, naming them.
+    const clash = db.all("SELECT group_concat(name, '|') AS names FROM tables GROUP BY lower(name) HAVING count(*) > 1");
+    if (clash.length) {
+      const sets = clash.map((r) => (r.names as string).split("|").map((n) => `'${n}'`).join(", "));
+      throw new CatalogError(`table names ignore case, but this catalog has tables that differ only in case: ${sets.join("; ")}`);
+    }
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS tables_by_name ON tables (name COLLATE NOCASE)");
   }
 
   private tx<T>(fn: () => T, write = true): T {
@@ -130,11 +141,11 @@ export class Catalog implements CatalogReader {
   // --- tables --------------------------------------------------------------------
 
   tableExists(name: string): boolean {
-    return isValidIdentifier(name) && !!one(this.db, "SELECT 1 AS x FROM tables WHERE name = ?", [name]);
+    return isValidIdentifier(name) && !!one(this.db, "SELECT 1 AS x FROM tables WHERE name = ? COLLATE NOCASE", [name]);
   }
 
   listTables(): string[] {
-    return this.db.all("SELECT name FROM tables ORDER BY name").map((r) => r.name as string);
+    return this.db.all("SELECT name FROM tables ORDER BY name COLLATE NOCASE, name").map((r) => r.name as string);
   }
 
   /** Creates `name` with snapshot 0 holding `files` (already written into `dir`). */
@@ -143,7 +154,8 @@ export class Catalog implements CatalogReader {
     const defs = parseColumns(columns);
     const now = nowMicros();
     this.tx(() => {
-      if (one(this.db, "SELECT 1 AS x FROM tables WHERE name = ?", [name])) throw new TableExistsError(`table '${name}' already exists`);
+      const old = one(this.db, "SELECT name FROM tables WHERE name = ? COLLATE NOCASE", [name]);
+      if (old) throw new TableExistsError(old.name === name ? `table '${name}' already exists` : `table '${name}' already exists as '${old.name}' (names ignore case)`);
       const id = this.db.run("INSERT INTO tables (name, dir, created_us) VALUES (?, ?, ?)", [name, dir, now]).lastId;
       this.db.run("INSERT INTO snapshots VALUES (?, 0, ?, 'create', ?, ?, ?)", [id, now, rows, schemaJson(defs), detail]);
       this.addFiles(id, 0, defs, files.map((file) => ({ file, position: null })));
@@ -154,9 +166,9 @@ export class Catalog implements CatalogReader {
   /** Removes the table's metadata; returns its data folder, for the caller to delete. */
   dropTable(name: string): string {
     return this.tx(() => {
-      const r = one(this.db, "SELECT dir FROM tables WHERE name = ?", [name]);
+      const r = one(this.db, "SELECT dir FROM tables WHERE name = ? COLLATE NOCASE", [name]);
       if (!r) throw new TableNotFoundError(`table '${name}' does not exist`);
-      this.db.run("DELETE FROM tables WHERE name = ?", [name]);
+      this.db.run("DELETE FROM tables WHERE name = ? COLLATE NOCASE", [name]);
       return r.dir as string;
     });
   }
@@ -164,7 +176,7 @@ export class Catalog implements CatalogReader {
   loadTable(name: string): TableMeta {
     if (!isValidIdentifier(name)) throw new TableNotFoundError(`table '${name}' does not exist`);
     return this.tx(() => {
-      const r = one(this.db, "SELECT id, dir FROM tables WHERE name = ?", [name]);
+      const r = one(this.db, "SELECT id, name, dir FROM tables WHERE name = ? COLLATE NOCASE", [name]);
       if (!r) throw new TableNotFoundError(`table '${name}' does not exist`);
       const snaps: Snapshot[] = this.db.all(
         "SELECT version, created_us, operation, rows, schema, detail FROM snapshots WHERE table_id = ? ORDER BY version", [r.id!],
@@ -172,7 +184,7 @@ export class Catalog implements CatalogReader {
         version: s.version as number, createdUs: s.created_us as number, operation: s.operation as Operation,
         rows: s.rows as number, columns: schemaFrom(s.schema as string), detail: s.detail as string,
       }));
-      return new TableMeta(r.id as number, name, snaps, r.dir as string);
+      return new TableMeta(r.id as number, r.name as string, snaps, r.dir as string);
     }, false);
   }
 
@@ -221,7 +233,7 @@ export class Catalog implements CatalogReader {
    * is the new schema (null: unchanged, and it must not have changed since `meta`). */
   commit(meta: TableMeta, operation: Operation, rows: number, add: readonly NewFileEntry[], remove: readonly DataFile[], columns: readonly ColumnDef[] | null = null, detail = ""): Snapshot {
     return this.tx(() => {
-      const r = one(this.db, "SELECT id FROM tables WHERE name = ?", [meta.name]);
+      const r = one(this.db, "SELECT id FROM tables WHERE name = ? COLLATE NOCASE", [meta.name]);
       if (!r || r.id !== meta.id) throw new TableNotFoundError(`table '${meta.name}' does not exist`);
       const last = one(this.db, "SELECT version, created_us, schema FROM snapshots WHERE table_id = ? ORDER BY version DESC LIMIT 1", [meta.id])!;
       let cols: ColumnDef[];
@@ -262,7 +274,7 @@ export class Catalog implements CatalogReader {
    * a revert can itself be reverted. */
   revert(name: string, version: number): Snapshot {
     return this.tx(() => {
-      const r = one(this.db, "SELECT id FROM tables WHERE name = ?", [name]);
+      const r = one(this.db, "SELECT id FROM tables WHERE name = ? COLLATE NOCASE", [name]);
       if (!r) throw new TableNotFoundError(`table '${name}' does not exist`);
       const id = r.id as number;
       const target = one(this.db, "SELECT schema FROM snapshots WHERE table_id = ? AND version = ?", [id, version]);
