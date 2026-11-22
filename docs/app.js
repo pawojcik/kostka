@@ -293,7 +293,7 @@ n = { __e: /* @__PURE__ */ __name(function(n3, t4, r3, u3) {
 }, "o"), e = /* @__PURE__ */ Symbol(), l = /(PointerCapture)$|Capture$/i, c = 0, a = {}, s = 0;
 
 // src/ui/rpc.ts
-var worker = new Worker(new URL(`./worker.js?v=${true ? "mws0affa" : "dev"}`, import.meta.url), { type: "module" });
+var worker = new Worker(new URL(`./worker.js?v=${true ? "mws2hd7w" : "dev"}`, import.meta.url), { type: "module" });
 var pending = /* @__PURE__ */ new Map();
 var nextId = 1;
 var onReady = /* @__PURE__ */ __name(() => {

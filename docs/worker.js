@@ -29369,6 +29369,17 @@ var Database = class {
 };
 
 // src/storage/opfs-file-store.ts
+async function writeAll(f, bytes) {
+  const h = await f.createSyncAccessHandle();
+  try {
+    h.truncate(0);
+    h.write(bytes, { at: 0 });
+    h.flush();
+  } finally {
+    h.close();
+  }
+}
+__name(writeAll, "writeAll");
 var OpfsFileStore = class {
   static {
     __name(this, "OpfsFileStore");
@@ -29400,15 +29411,21 @@ var OpfsFileStore = class {
     const [dirs, name] = this.split(path);
     const d = await this.dir(dirs, true);
     const tmp = await d.getFileHandle(`${name}.tmp`, { create: true });
-    const h = await tmp.createSyncAccessHandle();
+    await writeAll(tmp, bytes);
+    const move = tmp.move;
     try {
-      h.truncate(0);
-      h.write(bytes, { at: 0 });
-      h.flush();
-    } finally {
-      h.close();
+      if (!move) throw new TypeError("no move()");
+      try {
+        await move.call(tmp, d, name);
+      } catch (e) {
+        if (!(e instanceof TypeError)) throw e;
+        await move.call(tmp, name);
+      }
+    } catch (e) {
+      if (!(e instanceof TypeError)) throw e;
+      await writeAll(await d.getFileHandle(name, { create: true }), bytes);
+      await d.removeEntry(`${name}.tmp`);
     }
-    await tmp.move(name);
   }
   async remove(path) {
     const [dirs, name] = this.split(path);

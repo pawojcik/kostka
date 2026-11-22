@@ -5,6 +5,18 @@ import { FileNotFound, type FileStore } from "./file-store.ts";
 
 type Dir = FileSystemDirectoryHandle;
 
+/** Replaces a file's contents through a sync access handle (workers only). */
+async function writeAll(f: FileSystemFileHandle, bytes: Uint8Array): Promise<void> {
+  const h = await (f as unknown as { createSyncAccessHandle(): Promise<{ truncate(n: number): void; write(b: Uint8Array, o: { at: number }): void; flush(): void; close(): void }> }).createSyncAccessHandle();
+  try {
+    h.truncate(0);
+    h.write(bytes, { at: 0 });
+    h.flush();
+  } finally {
+    h.close();
+  }
+}
+
 export class OpfsFileStore implements FileStore {
   private readonly rootName: string;
   constructor(rootName = "data") {
@@ -37,15 +49,24 @@ export class OpfsFileStore implements FileStore {
     const [dirs, name] = this.split(path);
     const d = await this.dir(dirs, true);
     const tmp = await d.getFileHandle(`${name}.tmp`, { create: true });
-    const h = await (tmp as unknown as { createSyncAccessHandle(): Promise<{ truncate(n: number): void; write(b: Uint8Array, o: { at: number }): void; flush(): void; close(): void }> }).createSyncAccessHandle();
+    await writeAll(tmp, bytes);
+    // Safari (every browser on iOS) only has move(directory, name), which Chrome and
+    // Firefox take too; move(name) alone is "not enough arguments" there.
+    const move = (tmp as unknown as { move?: (...args: unknown[]) => Promise<void> }).move;
     try {
-      h.truncate(0);
-      h.write(bytes, { at: 0 });
-      h.flush();
-    } finally {
-      h.close();
+      if (!move) throw new TypeError("no move()");
+      try {
+        await move.call(tmp, d, name);
+      } catch (e) {
+        if (!(e instanceof TypeError)) throw e;
+        await move.call(tmp, name);
+      }
+    } catch (e) {
+      if (!(e instanceof TypeError)) throw e;
+      // a browser that can't move a file: write it in place
+      await writeAll(await d.getFileHandle(name, { create: true }), bytes);
+      await d.removeEntry(`${name}.tmp`);
     }
-    await (tmp as unknown as { move(n: string): Promise<void> }).move(name);
   }
 
   async remove(path: string): Promise<void> {
