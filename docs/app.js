@@ -293,7 +293,7 @@ n = { __e: /* @__PURE__ */ __name(function(n3, t4, r3, u3) {
 }, "o"), e = /* @__PURE__ */ Symbol(), l = /(PointerCapture)$|Capture$/i, c = 0, a = {}, s = 0;
 
 // src/ui/rpc.ts
-var worker = new Worker(new URL(`./worker.js?v=${true ? "mws2hd7w" : "dev"}`, import.meta.url), { type: "module" });
+var worker = new Worker(new URL(`./worker.js?v=${true ? "mws3j2qz" : "dev"}`, import.meta.url), { type: "module" });
 var pending = /* @__PURE__ */ new Map();
 var nextId = 1;
 var onReady = /* @__PURE__ */ __name(() => {
@@ -27758,10 +27758,12 @@ var SCENARIOS = [
       compile2("Compile with it"),
       see("No longer refused", "plan", () => /* @__PURE__ */ a3($, { children: "It compiles, and the coordinator started it: no cross joins in this plan." })),
       act2("What it changed", "stages", "Click stage 1, filter_pushdown.", (t4) => t4.q?.planStep === stageOf("filter_pushdown")),
-      see("Conditions moved down", "plan", () => /* @__PURE__ */ a3($, { children: "The WHERE conditions that compare two tables became join keys, and the ones on a single table (regions, manufacturers) moved down to that table's scan." })),
-      toggleRule("join_reorder", false, () => /* @__PURE__ */ a3($, { children: "join_reorder picks the order of the joins and which side of each is built into a hash table, from row estimates. Without it, the joins follow the FROM clause: date, customer, supplier, part, lineorder." })),
+      see("Conditions moved down", "plan", () => /* @__PURE__ */ a3($, { children: "The conditions on a single table (regions, manufacturers) moved down to that table's scan. The ones that compare two tables became join keys, but a condition can only sit on a join that has both of its tables below it. Every one of them involves lineorder, which comes last in FROM, so here all four land on the top join and the joins below are still cross joins." })),
+      act2("The next rule", "stages", "Click the join_reorder stage.", (t4) => t4.q?.planStep === stageOf("join_reorder")),
+      see("A new order", "plan", () => /* @__PURE__ */ a3($, { children: "join_reorder takes the five tables and the join conditions as one group and picks a new order from row estimates, starting from lineorder. It doesn't change any condition: each one follows the new order down to the lowest join that has both its tables, so every join gets one. It needs filter_pushdown to have run first, to know which tables connect and how many rows each filtered table has." })),
+      toggleRule("join_reorder", false, () => /* @__PURE__ */ a3($, { children: "Now turn it off. Without join_reorder, the joins follow the FROM clause: date, customer, supplier, part, lineorder." })),
       compile2("Compile without it"),
-      see("Refused again", "failbox", () => /* @__PURE__ */ a3($, { children: "In FROM order, date is joined to customer first, and no condition connects those two tables: it's a cross join again, 7 billion rows. Order matters." })),
+      see("Refused again", "failbox", () => /* @__PURE__ */ a3($, { children: "filter_pushdown did its part, but in FROM order the join conditions all wait at the top join, as at the filter_pushdown stage: date is joined to customer first with no condition between them, a cross join again, 7 billion rows. Order matters." })),
       toggleRule("join_reorder", true),
       compile2("Compile with every rule"),
       see("Accepted", "banner", () => /* @__PURE__ */ a3($, { children: "The coordinator started it and assigned the first splits." })),
