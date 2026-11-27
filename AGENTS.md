@@ -29,16 +29,18 @@ Keep this file short and true: if you find something here stale or wrong, fix it
 A significant change (a new concept, protocol, module boundary, or a change to how the
 engine works) starts with an ADR in `adr/NNNN-short-name.md`: one goal each, with its
 design (Mermaid diagrams), falsifiable exit criteria, alternatives considered, and the
-paths it **Affects**. The `plan-work` skill writes one. An ADR is **Proposed** until
-the user accepts it, then **Accepted** until a later one supersedes it (say so in
-both).
+paths it **Affects**. The `plan-work` skill writes one, with its issue;
+`implement-adr` implements the issue, and `review-adr` reviews it under the issue. An
+ADR is **Proposed** until the user accepts it, then **Accepted** until a later one
+supersedes it (say so in both).
 
 Don't read ADRs by default. Before changing code, `grep -l <path> adr/` and read the
 ones that concern it.
 
 ## Workflow
 
-- Work on `main` unless asked otherwise. Commit and push only when asked.
+- Work on `main` unless asked otherwise. Commit and push only when asked; asking for
+  an issue to be implemented (`implement-adr`) is asking for its commit and push.
 - Before a significant change, agree on a proposed ADR first. Small fixes need none.
 - Leave `data/` and `.venv/` alone. Delete only what you were asked to delete.
 - No new dependencies without asking.
