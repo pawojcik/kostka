@@ -1,8 +1,8 @@
 # Working on kostka
 
-kostka is a small OLAP engine for learning: SQL over Parquet files, planned into
-pipelines and run by a coordinator and workers on a simulated cluster, with a browser
-workbench in `docs/`. Its purpose is to be understood, so clarity beats cleverness and
+kostka is a small OLAP engine for learning: SQL over Parquet files, compiled and
+optimized, then planned and run by an engine on a simulated cluster (kostka's own:
+pipelines, a coordinator and workers), with a browser workbench in `docs/`. Its purpose is to be understood, so clarity beats cleverness and
 speed. `README.md` is the spec: the layout, every phase and the workbench.
 
 Keep this file short and true: if you find something here stale or wrong, fix it.
@@ -17,9 +17,11 @@ Keep this file short and true: if you find something here stale or wrong, fix it
   them (Layout in `README.md`).
 - **Onion architecture:** domain objects in the middle, physical infrastructure (IO,
   storage, transport, threads, clocks, the simulation) outside, behind interfaces the
-  domain defines. In execution, the coordinator and workers are the domain: they talk
-  only by commands and events, share no mutable objects, and know nothing of time or
-  transport; `execution/sim` is infrastructure that real IO could replace.
+  domain defines. In an engine (`engines/kostka/`), the coordinator and workers are
+  the domain: they talk only by commands and events, share no mutable objects, and
+  know nothing of time or transport; `cluster/` and `engines/kostka/sim.ts` are
+  infrastructure that real IO could replace. The shared layers never import an
+  engine: they use `execution/engine.ts`.
 - **Domain objects are unit-testable** without the infrastructure (no files, no
   simulation).
 - No abstraction until a second use needs it.
@@ -65,7 +67,7 @@ ones that concern it.
   why, in full sentences.
 - Tests mirror `src/` in `test/`. Query results are checked against SQLite
   (`node:sqlite`); a change to execution adds its configuration to
-  `test/engine/sql-vs-sqlite.test.ts` and a recovery test (stop a worker at many steps,
+  `test/api/sql-vs-sqlite.test.ts` and a recovery test (stop a worker at many steps,
   expect the same result). Compare times with the cost model (`cpu: "model"`).
 
 ## Writing

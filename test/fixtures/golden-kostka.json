@@ -1,0 +1,326 @@
+{
+ "0: select id, name from users where age > 40 order by id": {
+  "steps": 14,
+  "digest": "00426057cb05a4371fa134e9acbc33be91c355bc5c9f39be5b334e918fc910ec"
+ },
+ "0: select id, amount from orders where amount between 100 and 200 and status <> 'new' order by id": {
+  "steps": 32,
+  "digest": "7d5d1895bdf7abec26be0ca79e32c7f76634bf61b60be075c38d34a5ffa71a81"
+ },
+ "0: select status, count(*) n, sum(amount) s, min(amount) mn, max(amount) mx from orders group by status order by status nulls first": {
+  "steps": 39,
+  "digest": "b0d26891f5aab89c64333ba9b160d00637e0a176964a9c5e1305dd31df6f1bf3"
+ },
+ "0: select u.id, count(o.id) n from users u left join orders o on o.user_id = u.id group by u.id order by u.id": {
+  "steps": 46,
+  "digest": "74ef2c9896ae755260df8fc81a135eede76f164aefb736d20fd26c92bdf662b2"
+ },
+ "0: select country, count(*) from users group by country having count(*) > 5 order by country nulls last": {
+  "steps": 21,
+  "digest": "bbc8ff4338bcd0828108636adf3c90c21da637088d397e4e9e04f5877a3315a4"
+ },
+ "0: select user_id, avg(amount) a from orders group by 1 having a > 200 order by user_id nulls first": {
+  "steps": 39,
+  "digest": "abb731e16ab935c4fc9aa16f640461740e60657d452b79057ba5cc1740aa4f43"
+ },
+ "0: select country c, count(*) n from users group by c having n > 5 and c <> 'DE' order by c nulls first": {
+  "steps": 21,
+  "digest": "fd6fceb98ebd385c1fea487fd286c8a43aa3d9eda33f5390cddda592967a073b"
+ },
+ "0: select status, sum(amount) total from orders group by status having total > 1000 and count(*) > 10 order by status nulls first": {
+  "steps": 39,
+  "digest": "3ee71488452f1e0bc27171ac14c985e4aa9fdf295f366f42fa700e174ea92af3"
+ },
+ "0: select o.id oid, u.name uname from orders o join users u on o.user_id = u.id where u.country = 'PL' order by o.id desc limit 15": {
+  "steps": 39,
+  "digest": "7b0a050e72eb977ad52933ff22d611e5b89fe7942620e1dff56d0b945ceb23c1"
+ },
+ "0: select id from orders where status in ('new', 'paid') and item is not null order by amount desc nulls last, id limit 7": {
+  "steps": 32,
+  "digest": "90efa394642dd692ebcb8c70162cbcd7eb051b6a76be83afacc75ff308a27420"
+ },
+ "0: select distinct status from orders order by status nulls first": {
+  "steps": 39,
+  "digest": "d854592a882d8ccaeb5147917706291f0531daceaaf4a1d604560dcd0b3ebde1"
+ },
+ "0: with big as (select user_id, sum(amount) total from orders group by user_id) select u.id, b.total from users u join big b on b.user_id = u.id where b.total > 1000 order by u.id": {
+  "steps": 46,
+  "digest": "9d463daf2d07e7951a5a6fa69d26ca7090ced802c9ae3ff6f990c1b813fa5d5c"
+ },
+ "0: select o.id oid, i.name iname from orders o left join items i on o.item = i.id where o.id < 50 order by o.id": {
+  "steps": 19,
+  "digest": "436569622a8843f234b0b34a7e7e37f2c7713d2553d15bc6e800e684c696f6ff"
+ },
+ "0: select u.id uid, o.id oid from users u right join orders o on o.user_id = u.id where o.id < 40 order by o.id": {
+  "steps": 21,
+  "digest": "3a39d1a4de9d9bd2e3282ee8f60768ef012a863fb04f54b3e14c0bc228aaec68"
+ },
+ "0: select x.status, x.n from (select status, count(*) n from orders where amount > 50 group by status) x where x.n > 10 order by x.status nulls first": {
+  "steps": 39,
+  "digest": "52f5554ec23de96ede92c70d19c88e4e7b21231bdc7a17d2afe3ab894b729134"
+ },
+ "0: select id, case when amount > 250 then 'high' when amount > 100 then 'mid' else 'low' end from orders order by id limit 30": {
+  "steps": 32,
+  "digest": "a4892e5385c38431c525275b03dc45fcfd7c5bed20a332f202f2dae19a74c734"
+ },
+ "0: select u.name, sum(o.amount) from users u, orders o, items i where o.user_id = u.id and o.item = i.id and i.weight > 2 group by u.name order by u.name nulls first": {
+  "steps": 51,
+  "digest": "352a33f01cc3417774dfdc0728b63336fa2be42318db129e1461933509c1fe29"
+ },
+ "0: select count(*), count(age), sum(age), min(name), max(name) from users": {
+  "steps": 14,
+  "digest": "3287e55de66d6d7963b17335db3934e88f60fe96efd770a4507320ca7a727a81"
+ },
+ "0: select count(*) from orders where user_id not in (1, 2, 3)": {
+  "steps": 32,
+  "digest": "860677a86316b60c984f664cc657e7ee5d1e049dbd29a1564871bfc579ee280c"
+ },
+ "0: select id, coalesce(name, 'none') from users where id <= 10 order by id": {
+  "steps": 12,
+  "digest": "dd2f97ecc2bf1d6de455cea51f61ffbed1fb5ccff48142ea4e9a5da9a516b4d1"
+ },
+ "0: select status, count(distinct_users) from (select distinct status, user_id distinct_users from orders where user_id is not null) d group by status order by status nulls first": {
+  "steps": 46,
+  "digest": "6b2e805bf4f2c1fa477aaa8ceb50fba69416d8b9b9dd376adb9a6a6fc64938c3"
+ },
+ "0: select a.id aid, b.id bid from users a join users b on a.age = b.age and a.id < b.id where a.id < 20 order by a.id, b.id": {
+  "steps": 19,
+  "digest": "6ebcca6aaa24ea134578257c77aa21153dff1a98081a6ee801c5cc6a85510335"
+ },
+ "0: select * from orders where amount > 400": {
+  "steps": 27,
+  "digest": "7d21abfadd9d83efbf38bc3d2feb44d46c0a81323c1a9b1d79144427b0b8f5f6"
+ },
+ "0: select o.status, u.country from orders o join users u on u.id = o.user_id": {
+  "steps": 34,
+  "digest": "f91234e6a9745d2ab573569bbff4e121bb5730aebb40a67add0fa5a452b137e9"
+ },
+ "0: select user_id, item, count(*) from orders group by user_id, item": {
+  "steps": 34,
+  "digest": "507d293dba3d45ad319a9ee72ac828c5b9152cdab10ff8ba00fa1f2a622d37dd"
+ },
+ "0: select u.id uid, i.name iname from users u cross join items i where u.id < 4": {
+  "steps": 12,
+  "digest": "14c790c5d7b4980130ffb71d91e8b6e7f6892931cb5dc16e46af7ee1be7554e6"
+ },
+ "0: select * from users where name like '%a%' or age < 25": {
+  "steps": 9,
+  "digest": "c163813fff7f55b0809274ee24a80ef06cce086bdfcd36b35cce608822b5d618"
+ },
+ "1: select id, name from users where age > 40 order by id": {
+  "steps": 15,
+  "digest": "7177d2a1d6c3725a4aee885326f2e283ae509c28c4112ae1e0dd6654bb8c2485"
+ },
+ "1: select id, amount from orders where amount between 100 and 200 and status <> 'new' order by id": {
+  "steps": 34,
+  "digest": "38c6b9d3fba5ef9913321d18fe2e5fc68b16056c180c83bd21e9da034b7848d2"
+ },
+ "1: select status, count(*) n, sum(amount) s, min(amount) mn, max(amount) mx from orders group by status order by status nulls first": {
+  "steps": 39,
+  "digest": "e37642231e47ce6cb21d1c5fcbef2bf7276563ec457a7d6e62565d80a4bdec90"
+ },
+ "1: select u.id, count(o.id) n from users u left join orders o on o.user_id = u.id group by u.id order by u.id": {
+  "steps": 53,
+  "digest": "cb75b1aa35669f32c265df3e09c66cad13ab97a203976bd38c07fd98d7ed4318"
+ },
+ "1: select country, count(*) from users group by country having count(*) > 5 order by country nulls last": {
+  "steps": 23,
+  "digest": "51e597c57996100510103522d44bd57807758d80b4210a8378e265bf98ddda2f"
+ },
+ "1: select user_id, avg(amount) a from orders group by 1 having a > 200 order by user_id nulls first": {
+  "steps": 45,
+  "digest": "b1ddb10e596ce0f80f900932078175fdd11bbbb27da6fc94a0c127eafeb71df0"
+ },
+ "1: select country c, count(*) n from users group by c having n > 5 and c <> 'DE' order by c nulls first": {
+  "steps": 23,
+  "digest": "5de1e4843d07c7550b49ff939491a949a8d28717639efcf973cc8b87fc00a443"
+ },
+ "1: select status, sum(amount) total from orders group by status having total > 1000 and count(*) > 10 order by status nulls first": {
+  "steps": 39,
+  "digest": "e977207c8422d741816e77e76b21338c72f4e57e707b54baf39a6d354d8b155d"
+ },
+ "1: select o.id oid, u.name uname from orders o join users u on o.user_id = u.id where u.country = 'PL' order by o.id desc limit 15": {
+  "steps": 42,
+  "digest": "537726db0b45bc118ca7d1ef83de2d2343fd725a7972201a461906b3a09c3c22"
+ },
+ "1: select id from orders where status in ('new', 'paid') and item is not null order by amount desc nulls last, id limit 7": {
+  "steps": 34,
+  "digest": "817f3087831ca4658a2733d5b6cb78956c51e9fba39f28cdc7b1b8acf3a94e7c"
+ },
+ "1: select distinct status from orders order by status nulls first": {
+  "steps": 39,
+  "digest": "4b1b91f16bdc51a80947cbdd55acd7fc0701bb304b148df4f092c5bc149f1cd6"
+ },
+ "1: with big as (select user_id, sum(amount) total from orders group by user_id) select u.id, b.total from users u join big b on b.user_id = u.id where b.total > 1000 order by u.id": {
+  "steps": 53,
+  "digest": "29f72ee0bce6ac84a3e32247811a9fa702a38e1159f6df1b7a65e5ab733e17e7"
+ },
+ "1: select o.id oid, i.name iname from orders o left join items i on o.item = i.id where o.id < 50 order by o.id": {
+  "steps": 20,
+  "digest": "d4b605e4ec49943c4488087750624f7480d6eef6177769320e6fb72795ed798f"
+ },
+ "1: select u.id uid, o.id oid from users u right join orders o on o.user_id = u.id where o.id < 40 order by o.id": {
+  "steps": 23,
+  "digest": "8771283a80ae6c694e85d17e206e63444d146a188bb53208ed5e3d013176460f"
+ },
+ "1: select x.status, x.n from (select status, count(*) n from orders where amount > 50 group by status) x where x.n > 10 order by x.status nulls first": {
+  "steps": 39,
+  "digest": "67409f1b18f8416d3b6c31343ef369bbd025b1fa65e97b900d918a44ceaec673"
+ },
+ "1: select id, case when amount > 250 then 'high' when amount > 100 then 'mid' else 'low' end from orders order by id limit 30": {
+  "steps": 34,
+  "digest": "b56f27d98725db1e35aba4c4c7d1f1b091db79dfecb2a0bb46bccfbc0f84d870"
+ },
+ "1: select u.name, sum(o.amount) from users u, orders o, items i where o.user_id = u.id and o.item = i.id and i.weight > 2 group by u.name order by u.name nulls first": {
+  "steps": 58,
+  "digest": "1b7a9d50a195fcf2d7209fb61679dbbe57ff562694e023c5183ec15a43d0ce51"
+ },
+ "1: select count(*), count(age), sum(age), min(name), max(name) from users": {
+  "steps": 15,
+  "digest": "545a4f63aa3d2400889edc6fdccf7eba5c09e53fb75d4ab68d682f9ebd7a151c"
+ },
+ "1: select count(*) from orders where user_id not in (1, 2, 3)": {
+  "steps": 34,
+  "digest": "c40204d6463525c44a34bdc25529a6152eba92bc3be586986785045a1b544444"
+ },
+ "1: select id, coalesce(name, 'none') from users where id <= 10 order by id": {
+  "steps": 12,
+  "digest": "1148aad58f7aabb7232de0cf94836d70da1ac20c243e3dfce6813408f72d5773"
+ },
+ "1: select status, count(distinct_users) from (select distinct status, user_id distinct_users from orders where user_id is not null) d group by status order by status nulls first": {
+  "steps": 50,
+  "digest": "f75522a5fc0fd9ebaa1b82a658ba3e445160905ed5b429cd4281995b611460ab"
+ },
+ "1: select a.id aid, b.id bid from users a join users b on a.age = b.age and a.id < b.id where a.id < 20 order by a.id, b.id": {
+  "steps": 20,
+  "digest": "d523303a456fd740ec7b810266cd2636890ee014f27629b2f9e3922bc4e38cf2"
+ },
+ "1: select * from orders where amount > 400": {
+  "steps": 29,
+  "digest": "ecd211adc3f9777378b03b501451c8197f7e2ca5cccf99499789b717179762e8"
+ },
+ "1: select o.status, u.country from orders o join users u on u.id = o.user_id": {
+  "steps": 37,
+  "digest": "a5191eaef7707eb6d93afedb9f89f9e681948938b356db7e2e755bbff82f77a2"
+ },
+ "1: select user_id, item, count(*) from orders group by user_id, item": {
+  "steps": 40,
+  "digest": "670b846b04bda255bf9c6cc2b9cedc072d48a5588c8b7461262758f4d87c1999"
+ },
+ "1: select u.id uid, i.name iname from users u cross join items i where u.id < 4": {
+  "steps": 12,
+  "digest": "7fcf100adceb95a01755b736658548ef851ed8d5b19fa4ea58666eb33a128847"
+ },
+ "1: select * from users where name like '%a%' or age < 25": {
+  "steps": 10,
+  "digest": "7079fa397a25a5725645d40f96bc6e4d57b5227cb83a4ca1c41ffe1ffc74d906"
+ },
+ "2: select id, name from users where age > 40 order by id": {
+  "steps": 15,
+  "digest": "6f77c445a8be184479c1b085a090923f54ca4667ae22650ba1e379d46199d3af"
+ },
+ "2: select id, amount from orders where amount between 100 and 200 and status <> 'new' order by id": {
+  "steps": 35,
+  "digest": "bcdeaeb7004cbe2c0189661ce046daacf6f544ac46f14cc1e769f58202b4acd0"
+ },
+ "2: select status, count(*) n, sum(amount) s, min(amount) mn, max(amount) mx from orders group by status order by status nulls first": {
+  "steps": 43,
+  "digest": "b51b66a7fd9a3b05389e1f493ceafcb3d92b428f542f349acaac1b1420af5376"
+ },
+ "2: select u.id, count(o.id) n from users u left join orders o on o.user_id = u.id group by u.id order by u.id": {
+  "steps": 83,
+  "digest": "185360ac8a5cb1f5aa758fab50628760a38699ff92dd6ed60cf434b8605d15b5"
+ },
+ "2: select country, count(*) from users group by country having count(*) > 5 order by country nulls last": {
+  "steps": 26,
+  "digest": "ad1c4b5311a07f95c5fbedd331230eec14bc34d28d51174570b2e0b5aa640cf9"
+ },
+ "2: select user_id, avg(amount) a from orders group by 1 having a > 200 order by user_id nulls first": {
+  "steps": 50,
+  "digest": "1852d8c47fe0b7dd6d558b1f3ff04e47788fc552743be3a73b42dccd5fd0f290"
+ },
+ "2: select country c, count(*) n from users group by c having n > 5 and c <> 'DE' order by c nulls first": {
+  "steps": 20,
+  "digest": "2b75d07130bc51846b83c621ffb96c38ceac9a3f48987ad25b7c9b7ec9f9be96"
+ },
+ "2: select status, sum(amount) total from orders group by status having total > 1000 and count(*) > 10 order by status nulls first": {
+  "steps": 43,
+  "digest": "067326f8ba35bb0ed8f28de408ce7d2677aac9407b87bc2588e0f8cfa0fc6d67"
+ },
+ "2: select o.id oid, u.name uname from orders o join users u on o.user_id = u.id where u.country = 'PL' order by o.id desc limit 15": {
+  "steps": 149,
+  "digest": "7e1b9f16036b2c4191c2f13570b8d96f88504455a5262366952e1b0f7a15520e"
+ },
+ "2: select id from orders where status in ('new', 'paid') and item is not null order by amount desc nulls last, id limit 7": {
+  "steps": 35,
+  "digest": "e5728ca4365c6fb229f1f93f9ea69fb33cad916edc8b53a35120df54b0628e1c"
+ },
+ "2: select distinct status from orders order by status nulls first": {
+  "steps": 43,
+  "digest": "08383289113ee7b48e1b193b8f85d227600a8bc720b6480f38dffc0eb402ab2e"
+ },
+ "2: with big as (select user_id, sum(amount) total from orders group by user_id) select u.id, b.total from users u join big b on b.user_id = u.id where b.total > 1000 order by u.id": {
+  "steps": 82,
+  "digest": "257a2d9dcad77017b1732b47deb2a3ec2ab32c263f050878ad68deac45b1eed9"
+ },
+ "2: select o.id oid, i.name iname from orders o left join items i on o.item = i.id where o.id < 50 order by o.id": {
+  "steps": 38,
+  "digest": "134be5291ec6ae760b8e361a8e8951a65ba42417b1db6581538d494794b507ed"
+ },
+ "2: select u.id uid, o.id oid from users u right join orders o on o.user_id = u.id where o.id < 40 order by o.id": {
+  "steps": 38,
+  "digest": "fa30ad9846be832d1137dfdee5e806986028e5fa716405cf30c782d44e04e725"
+ },
+ "2: select x.status, x.n from (select status, count(*) n from orders where amount > 50 group by status) x where x.n > 10 order by x.status nulls first": {
+  "steps": 43,
+  "digest": "d2398e695c821bd8762af4c0dae7305c97898f0ff872c3bbef46dc7916938144"
+ },
+ "2: select id, case when amount > 250 then 'high' when amount > 100 then 'mid' else 'low' end from orders order by id limit 30": {
+  "steps": 35,
+  "digest": "7b65601376e1c352673075998f630f8228021e1af3bf22441fb2d6084d63ae39"
+ },
+ "2: select u.name, sum(o.amount) from users u, orders o, items i where o.user_id = u.id and o.item = i.id and i.weight > 2 group by u.name order by u.name nulls first": {
+  "steps": 211,
+  "digest": "b58f2308c5b4c17ce26ef1db45c8d0eadde9a753b042961dec9909fa7d0bc334"
+ },
+ "2: select count(*), count(age), sum(age), min(name), max(name) from users": {
+  "steps": 15,
+  "digest": "162fd51956e2bda87eef2d373c78531f88af6d5a178213e46de32eaf97393aba"
+ },
+ "2: select count(*) from orders where user_id not in (1, 2, 3)": {
+  "steps": 35,
+  "digest": "8f44ffd9a94ed2f19245b116b43692504dbe1c04c1943acf9316164ebd019d77"
+ },
+ "2: select id, coalesce(name, 'none') from users where id <= 10 order by id": {
+  "steps": 12,
+  "digest": "cea819645ee3d9c4eb6074275fce86a60e03adc7c4fa249dd328e6592e4f6346"
+ },
+ "2: select status, count(distinct_users) from (select distinct status, user_id distinct_users from orders where user_id is not null) d group by status order by status nulls first": {
+  "steps": 59,
+  "digest": "63b4a1c48725833d705f847806572d2c29ed6bd5b89055ab05a2cd1808f52682"
+ },
+ "2: select a.id aid, b.id bid from users a join users b on a.age = b.age and a.id < b.id where a.id < 20 order by a.id, b.id": {
+  "steps": 35,
+  "digest": "7e4aeffe4be69ac637e0286304d18bba362dea3b99be23cd1bf4cb854606d5ec"
+ },
+ "2: select * from orders where amount > 400": {
+  "steps": 30,
+  "digest": "2c4bc20e48ebc562fcc71bdce854f0234155c028bf65ffc5edf71d06021e568d"
+ },
+ "2: select o.status, u.country from orders o join users u on u.id = o.user_id": {
+  "steps": 144,
+  "digest": "cfc0c2db5e0c635add9e6e2bf18d5de3b1b472f3aeeba9db8ab7b83d43de7a26"
+ },
+ "2: select user_id, item, count(*) from orders group by user_id, item": {
+  "steps": 45,
+  "digest": "756fe0952844938c1e3dbace0bfab6ed203d3f986ee8249468fef252b2b717f0"
+ },
+ "2: select u.id uid, i.name iname from users u cross join items i where u.id < 4": {
+  "steps": 12,
+  "digest": "102571bfe5a94453f1ae5d19ae052563ec4d932cfdb445e7088878b93cba221c"
+ },
+ "2: select * from users where name like '%a%' or age < 25": {
+  "steps": 10,
+  "digest": "88b4649f2dab0e7d09fc3c90d2960ca2c8ab3a19c64cc2d596791ed22e068dbc"
+ }
+}

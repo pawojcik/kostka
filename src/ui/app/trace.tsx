@@ -1,12 +1,13 @@
-// The trace: a collapsible Gantt tree, down to workers, on one time axis, from the start of parsing to
-// the end of the run. Compilation comes first (parse, analyze, each optimizer pass and
-// physical planning, measured in real time in this browser), then execution
-// (simulated), starting where compilation ended: per pipeline, then per worker, each
-// split a bar in its pipeline's color.
+// The trace: a collapsible Gantt tree, down to nodes, on one time axis, from the start
+// of parsing to the end of the run. Compilation comes first (parse, analyze, each
+// optimizer pass and the engine's planning, measured in real time in this browser),
+// then execution (simulated), starting where compilation ended: per group of units
+// (kostka: per pipeline), then per node, each unit a bar drawn as its engine says.
 
 import { useState } from "preact/hooks";
 import type { Json, Query } from "./store.ts";
-import { ms, pc } from "./format.ts";
+import { ms } from "./format.ts";
+import { viewsOf } from "./engines/index.ts";
 import { TimeBar } from "./widgets.tsx";
 
 interface Row { key: string; depth: number; label: string; slices: { start: number; end: number; cls: string; title: string }[]; value: string; kids?: Row[] }
@@ -57,35 +58,40 @@ export function TraceView({ q, state }: { q: Query; state: Json }) {
       : { key: p.phase, depth: 1, label: PHASES[p.phase] ?? p.phase, value: ms(p.end - p.start), slices: [{ start: p.start, end: p.end, cls: `c ph-${p.phase}`, title: `${PHASES[p.phase]}: ${ms(p.end - p.start)}` }] }),
   };
   const end = at + Math.max(1e-6, state.elapsed_ms ?? 0);
-  const unitSlice = (u: Json) => ({ start: at + u.start_ms, end: at + u.end_ms, cls: `s ${pc(u.pipeline)}`, title: `split ${u.split}${u.attempt > 1 ? ` (attempt ${u.attempt})` : ""}: ${u.label} on W${u.worker}\n${ms(u.start_ms)} → ${ms(u.end_ms)} of the run` });
+  const v = viewsOf(state.engine);
+  const unitSlice = (u: Json) => {
+    const look = v.unit(u, q);
+    return { start: at + u.start_ms, end: at + u.end_ms, cls: `s ${look.cls}`, title: look.title };
+  };
+  const units = (k: number) => `${k} ${v.unitNoun}${k === 1 ? "" : "s"}`;
   const exec: Row = {
     key: "exec", depth: 0, label: "Execution (simulated)", value: ms(state.elapsed_ms),
     slices: state.units.map(unitSlice),
-    kids: state.pipelines.map((p: Json) => {
-      const us = state.units.filter((u: Json) => u.pipeline === p.index);
+    kids: v.groups(state).map((g) => {
+      const us = state.units.filter((u: Json) => u.group === g.group);
       return {
-        key: `p:${p.index}`, depth: 1, label: `P${p.index} ${p.ops.map((o: Json) => o.label.split("(")[0]).join(" → ")}`, value: p.end_ms === null ? p.status : ms(p.end_ms - p.start_ms),
+        key: `g:${g.group}`, depth: 1, label: g.label, value: g.value,
         slices: us.map(unitSlice),
-        kids: [...new Set<number>(us.map((u: Json) => u.worker))].sort((a, b) => a - b).map((w) => {
-          const wu = us.filter((u: Json) => u.worker === w);
-          const failed = wu.filter((u: Json) => u.failed).length;
-          return { key: `w:${p.index}:${w}`, depth: 2, label: `on W${w}`, value: `${wu.length} split${wu.length === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}`, slices: wu.map(unitSlice) };
+        kids: [...new Set<number>(us.map((u: Json) => u.node))].sort((a, b) => a - b).map((nd) => {
+          const nu = us.filter((u: Json) => u.node === nd);
+          const failed = nu.filter((u: Json) => u.failed).length;
+          return { key: `n:${g.group}:${nd}`, depth: 2, label: `on ${v.nodeName(nd)}`, value: `${units(nu.length)}${failed ? `, ${failed} failed` : ""}`, slices: nu.map(unitSlice) };
         }),
       };
     }),
   };
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * end);
-  const total = Object.fromEntries(Object.keys(state.workers[0]?.time_ms ?? {}).map((c) => [c, state.workers.reduce((s: number, w: Json) => s + w.time_ms[c], 0)]));
+  const total = Object.fromEntries(Object.keys(state.nodes[0]?.time_ms ?? {}).map((c) => [c, state.nodes.reduce((s: number, w: Json) => s + w.time_ms[c], 0)]));
   return (
     <div class="stack" data-tour="trace">
-      <section class="panel stack"><h4>Time by category, all workers</h4><TimeBar tm={total} /></section>
+      <section class="panel stack"><h4>Time by category, all {v.nodeNoun}s</h4><TimeBar tm={total} /></section>
       <section class="panel trace">
         <div class="trow taxis"><div class="tl">from the start of parsing</div>
           <div class="tt"><b class="tmark" style={`left:${(100 * at) / end}%`} />{ticks.map((x) => <span style={`left:${(100 * x) / end}%`}>{ms(x)}</span>)}</div>
           <div class="tv">{ms(end)}</div></div>
         <Rows rows={[compile, exec]} end={end} open={open} toggle={toggle} mark={at} />
       </section>
-      <p class="note">One time axis: compilation (measured in this browser) and then execution (simulated), which starts where compilation ended (the vertical line, at {ms(at)}). Bars are splits, colored by pipeline. Optimizer passes that changed the plan are darker.</p>
+      <p class="note">One time axis: compilation (measured in this browser) and then execution (simulated), which starts where compilation ended (the vertical line, at {ms(at)}). Bars are {v.unitNoun}s, {v.unitColors}. Optimizer passes that changed the plan are darker.</p>
     </div>
   );
 }

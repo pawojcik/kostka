@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { openDatabase } from "../../src/engine/node.ts";
+import { openDatabase } from "../../src/node.ts";
 import { AnalysisError, SchemaError, TableExistsError, TableNotFoundError } from "../../src/core/errors.ts";
 import { formatTimestamp } from "../../src/core/types.ts";
 import { MemoryFileStore } from "../../src/storage/file-store.ts";

@@ -12,8 +12,11 @@
 //   TopN(child, keys, n)         Sort + Limit, fused by the optimizer
 //
 // To add a node: subclass PlanNode, implement `children`, `withChildren` (which
-// recomputes a pass-through schema) and `detail`, and give the physical planner a
-// way to compile it (physical/planner.ts).
+// recomputes a pass-through schema) and `detail`, and give each engine's planner a
+// way to compile it (engines/kostka/physical/planner.ts).
+//
+// `planIds` numbers a plan's nodes (in preorder, a node shared by two parents once),
+// so that the workbench's plan trees and an engine's operators name a node the same.
 
 import { AggCall, Alias, type Expr, Field, type SortKey } from "../core/expr.ts";
 import type { ColumnType } from "../core/types.ts";
@@ -263,3 +266,15 @@ export function* nodes(plan: PlanNode): Generator<PlanNode> {
 }
 
 export const idsOf = (n: PlanNode): Set<number> => new Set(n.schema.map((f) => f.id));
+
+/** The plan's nodes, numbered in preorder from 0; a node that appears twice keeps
+ * its first number. */
+export function planIds(root: PlanNode): Map<PlanNode, number> {
+  const ids = new Map<PlanNode, number>();
+  const walk = (n: PlanNode): void => {
+    if (!ids.has(n)) ids.set(n, ids.size);
+    for (const c of n.children()) walk(c);
+  };
+  walk(root);
+  return ids;
+}

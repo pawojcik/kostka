@@ -5,9 +5,10 @@
 // Messages: {id, name, args} -> {id, ok, value | error}; progress: {id, event}.
 
 import { openWasmSqlite } from "../catalog/wasm-sqlite.ts";
-import { Database } from "../engine/database.ts";
+import { Database } from "../api/database.ts";
 import { MemoryFileStore } from "../storage/file-store.ts";
 import { OpfsFileStore } from "../storage/opfs-file-store.ts";
+import { ENGINES } from "../engines/index.ts";
 import { Session } from "./session.ts";
 
 let session: Session | null = null;
@@ -15,12 +16,12 @@ let session: Session | null = null;
 async function boot(): Promise<string> {
   try {
     const db = await openWasmSqlite("/catalog.db", true);
-    session = new Session(new Database(db, new OpfsFileStore("kostka-data")), "opfs");
+    session = new Session(new Database(db, new OpfsFileStore("kostka-data"), ENGINES), "opfs");
     return "opfs";
   } catch (e) {
     console.warn("OPFS is not available, keeping the database in memory:", e);
     const db = await openWasmSqlite(":memory:", false);
-    session = new Session(new Database(db, new MemoryFileStore()), "memory");
+    session = new Session(new Database(db, new MemoryFileStore(), ENGINES), "memory");
     return "memory";
   }
 }

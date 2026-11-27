@@ -5,13 +5,14 @@ learn from.
 
 A small analytical database for learning how query engines work. Tables are
 versioned sets of immutable Parquet files, described by a SQLite catalog. Queries
-are SQL `SELECT`s, compiled into a typed logical plan, optimized by rules, planned
-into pipelines and run step by step by a coordinator and workers, Trino-style,
-on a **simulated cluster**. Everything runs in the browser (the workbench, in `docs/`) and
+are SQL `SELECT`s, compiled into a typed logical plan and optimized by rules; an
+**engine** then plans and runs the optimized plan step by step on a **simulated
+cluster** of nodes. kostka's own engine plans pipelines and runs them with a
+coordinator and workers, Trino-style. Everything runs in the browser (the workbench, in `docs/`) and
 in Node (tests, scripts).
 
 ```ts
-import { openDatabase } from "./src/engine/node.ts";
+import { openDatabase } from "./src/node.ts";
 
 const db = openDatabase();                       // in memory; openDatabase("data") keeps it
 await db.createTable("foo", [["a", "int"], ["b", "int"], ["s", "string"]]);
@@ -32,42 +33,56 @@ committed.
 ## Layout
 
 The code is split by phase. Each layer only imports from the layers above it in this
-list (the UI and `engine/` import everything).
+list. The shared layers (everything but `engines/`) know an engine only through
+`execution/engine.ts`; `src/node.ts` and the workbench's worker give a Database every
+engine there is (`engines/index.ts`), and the UI imports everything.
 
 ```
 src/
-  core/         types and values, errors, bound expressions, functions, hashing
+  core/         types and values, errors, bound expressions, functions, hashing,
+                the categories of time
     functions/  the function registry, scalar functions and operators, casts, aggregates
   catalog/      table metadata in SQLite: tables, snapshots, files, per-file statistics
   storage/      file stores (memory, Node, OPFS), Parquet data files, statistics
-                and sketches, the table writer
+                and sketches, the table writer, the TableReader engines read files with
   sql/          the compiler front end: lexer, parser, AST, analyzer, logical plan
     optimizer/  rules, cardinality estimates
-  physical/     the physical planner, pipelines, output buffers, splits, operators,
-                the cost model, the ExecContext operators run in
-    operators/  scan, streaming (filter, project, limit), aggregate, join, sort,
-                buffer sinks and sources, runtime filters
-  execution/    the Execution API, the protocol, cluster settings
-    coordinator/  the coordinator, its QueryState and recovery (domain)
-    worker/     workers: split queues, output buffers, the cache, memory (domain)
-    sim/        the simulation: transport, clocks, data plane, run context, and the
-                Execution built from them, SimExecution (infrastructure)
+  cluster/      the simulated cluster every engine runs on (infrastructure): settings
+                and IO profiles, nodes (cores, clocks, the IO channel), memory and
+                disk, blocks and the data plane, the event loop and its history,
+                the cost model, row sizes
+  execution/    the seam: what an engine is, an Execution, the state every engine
+                shows (ExecState), and the registry of engines
+  api/          Database (tables + loaders + queries) and CompiledQuery
+  engines/      the engines (index.ts lists them)
+    kostka/     kostka's engine: engine.ts (its settings and kinds of step)
+      physical/   the physical planner, pipelines, output buffers, splits, operators,
+                  the ExecContext operators run in
+        operators/  scan, streaming (filter, project, limit), aggregate, join, sort,
+                  buffer sinks and sources, runtime filters
+      coordinator/  the coordinator, its QueryState and recovery (domain)
+      worker/   workers: split queues, their pieces, the cache (domain)
+      protocol.ts  commands and events
+      sim.ts    SimExecution: the coordinator and one worker per node on the cluster
+      unit-context.ts  the context a split runs in: time, IO, fetching pieces
   loaders/      CSV import, column generators, NYC taxi, SSB and TPC-DS data and queries
-  engine/       Database (tables + loaders + queries), CompiledQuery, Node setup
-  ui/           the workbench: Session (engine side, in a Web Worker), RPC, the SQL
-                editor, the Preact app
+  node.ts       openDatabase on Node, with every engine
+  ui/           the workbench: Session (in a Web Worker), RPC, the SQL editor, the
+                Preact app (app/; each engine's own views in app/engines/)
 test/           mirrors src/; results are checked against SQLite (node:sqlite)
 tools/build.mjs builds the workbench (esbuild) into docs/
 docs/           GitHub Pages: the built workbench (not committed), plus the taxi data,
                 engine-comparison.html and spark-job-lab.html
 .github/        the workflow that tests, builds and deploys to GitHub Pages
+adr/            decisions (ADRs)
 ```
 
 A query goes through:
 
 ```
-SQL ─parse─▶ AST ─analyze─▶ logical plan ─rules─▶ optimized plan
-    ─physical planner─▶ pipelines + output buffers ─coordinator─▶ splits ─workers─▶ result
+SQL ─parse─▶ AST ─analyze─▶ logical plan ─rules─▶ optimized plan ─engine─▶ an Execution
+kostka: optimized plan ─physical planner─▶ pipelines + output buffers
+        ─coordinator─▶ splits ─workers─▶ result
 ```
 
 ## Cross-cutting semantics
@@ -338,7 +353,7 @@ settings      key -> JSON value (file_rows)
   of a correlated subquery) the original is kept as `reference` and the tests check
   both give the same rows on SQLite.
 
-## Physical planning (`physical/`)
+## Physical planning (`engines/kostka/physical/`)
 
 The **physical planner** (`planner.ts`) turns an optimized plan into **pipelines**
 (`source → operator* → sink`) joined by **output buffers**. It reads no data.
@@ -361,8 +376,11 @@ Sort / TopN        SortSink / TopNSink write sorted runs to a gather buffer;
 root               ResultSink
 ```
 
-Planner settings: `shufflePartitions` (N, or the default "auto": 2 × workers), `joinStrategy` (auto,
-broadcast, shuffle), `runtimeFilters` (on). A new logical node is supported by
+kostka's settings (a query's `settings`; `planner` is their old name, still accepted)
+are the planner's: `shufflePartitions` (N, or the default "auto": 2 × workers),
+`joinStrategy` (auto, broadcast, shuffle), `runtimeFilters` (on). The engine checks
+them when the query starts: an unknown setting or value fails with a KostkaError. The
+number of workers is the cluster's number of nodes. A new logical node is supported by
 `registerPlanner(kind, fn)`.
 
 ### Operators (`operator.ts`)
@@ -471,16 +489,25 @@ A cluster setting, `cpu`, chooses where an operator's CPU time comes from:
   Browsers coarsen `performance.now()` (to 100 µs without cross-origin isolation,
   which GitHub Pages cannot enable), so very short calls are noisy; their sum is
   still about right.
-- **model** (`cost.ts`): computed from rows and rough per-row nanoseconds for a
+- **model** (`cluster/cost.ts`): computed from rows and rough per-row nanoseconds for a
   columnar engine on one core: scan decode, filter, project, hash insert (≈ 1.2
   probes), hash probe, sort (n log n), merge, output row (≈ 0.3), and so on. Every
   run of a query takes the same simulated time and has the same schedule.
 
 IO time is always computed, from bytes and the IO profile.
 
-## Execution (`execution/`)
+## Execution (`execution/`, `cluster/`, `engines/kostka/`)
 
-Execution is a small distributed system. Its **domain** is the coordinator and the
+A query runs on an **engine** (`execution/engine.ts`). An engine takes the optimized
+plan, plans it in its own way and runs it on the shared simulated **cluster**
+(`cluster/`): nodes with cores, memory, disk, blocks and an IO channel, an event loop
+and a history of steps. The API, the Session and the workbench's shared views see
+only what every engine has (an `Execution` and its `ExecState`); each engine's own
+objects pass through its state to its own views. A query picks its engine by name
+(`engine`, default the first: `kostka`); an unknown name fails with
+`UnknownEngineError`, which lists the engines there are.
+
+kostka's engine is the rest of this section. Its execution is a small distributed system. Its **domain** is the coordinator and the
 workers, which talk only by messages; the **infrastructure** around them carries the
 messages, keeps time, stores data, runs the work and notices when a worker is gone.
 Today the infrastructure is a simulation in one thread; real transport, threads and
@@ -499,7 +526,7 @@ of P1 that W0 runs.
 
 ### The domain
 
-- **Coordinator** (`coordinator/`), one per query. It owns the **QueryState** and is
+- **Coordinator** (`engines/kostka/coordinator/`), one per query. It owns the **QueryState** and is
   the only one that knows the whole query; it never reads rows (except the result):
   - workers: which are up, and which are gone (`ClusterState`);
   - pipelines: waiting, running, done (and running again while it remakes lost
@@ -512,14 +539,16 @@ of P1 that W0 runs.
     released;
   - partition owners per partitioning; runtime filter keys; per-operator metrics
     from the split reports; the result rows, by split.
-- **Workers** (`worker/`): each has the plan, a queue of splits per pipeline, its
-  pieces of every output buffer, its cache of hash tables and its memory. A worker
-  decides spilling (pieces first, oldest first; state that cannot fit fails the
-  split with `OutOfMemoryError`, and a piece that doesn't fit on its disk with
-  `OutOfDiskError`). It runs one split at a time, the one that
-  arrived first.
+- **Workers** (`engines/kostka/worker/`), one per node: each has the plan, a queue
+  of splits per pipeline, its pieces of every output buffer and its cache of hash
+  tables. A piece's rows are a block of its node, and the worker holds pieces and
+  state in its node's memory through interfaces it defines (`NodeMemory`,
+  `NodeBlocks`); the node's memory decides spilling (blocks first, oldest first;
+  state that cannot fit fails the split with `OutOfMemoryError`, and a block that
+  doesn't fit on its disk with `OutOfDiskError`). It runs one split at a time, the
+  one that arrived first, on core 0 of its node.
 
-Commands (coordinator → worker) and events (→ coordinator), `protocol.ts`:
+Commands (coordinator → worker) and events (→ coordinator), `engines/kostka/protocol.ts`:
 
 | command | |
 |---|---|
@@ -580,54 +609,84 @@ coordinator recovers from **lineage**, without restarting the query:
 6. Result rows are kept by split, so a split's rows are never counted twice. The
    query fails when no worker is left.
 
-### Infrastructure: the simulation (`sim/`, `cluster.ts`)
+### Infrastructure: the cluster (`cluster/`) and the simulation (`sim.ts`)
 
-Ports the domain uses, and their simulated adapters:
+The cluster is shared by every engine; `engines/kostka/sim.ts` places one worker on
+each node and connects the coordinator and the workers to it.
 
-- **Transport**: commands reach a worker at once; events go through a queue ordered
-  by simulated time, so the coordinator handles them in the order they happened.
-- **Executor and clock**: one thread per worker. A worker runs a split when it has
-  one, starting at the later of its clock and when the split arrived; the
-  simulation always advances the earliest thing that can happen (an event to
-  deliver, or a split to start). A split runs atomically and is placed on its
-  worker's timeline as segments of CPU, storage read, network, spill write and
-  spill read.
-- **Data plane**: a worker fetches a piece from the worker holding it: network time
-  if it is another worker, disk time if it was spilled; an error if that worker is
-  gone.
-- **Failures**: `stopWorker(w)` stops a worker at the current time: its events not
-  yet delivered are lost with it, and the coordinator gets `WorkerGone`.
+- **Nodes** (`node.ts`): `nodes` simulated machines, each with `cores` cores, its
+  memory and disk (`memory.ts`), its blocks (`blocks.ts`) and one **IO channel**
+  (its storage, disk and network bandwidth). Each core has its own clock and runs one
+  **unit** of work at a time (for kostka, a split). A unit is laid out on its core's
+  timeline as segments of CPU, storage read, network, spill write and spill read.
+  CPU segments of units on different cores overlap; IO segments take turns on the
+  channel, and the time a unit waits for it is a **wait** segment. With one core in
+  use nothing waits.
+- **Transport and executor** (`loop.ts`, the `EventLoop`): events go through a queue
+  ordered by simulated time, so the scheduler (kostka's coordinator) handles them in
+  the order they happened; commands reach a node at once. A core runs a unit when it
+  has one, starting at the later of its clock and when the unit arrived; the loop
+  always does the earliest thing that can happen (an event to deliver first on a
+  tie, then a unit to start).
+- **History** (`loop.ts`): every step with its messages, and a frame of every node
+  right after it (a node the step did not touch shares the frame before).
+- **Data plane** (`blocks.ts`): a node reads a block from the node holding it:
+  network time if it is another node, disk time if it was spilled; `BlockLostError`
+  if that node is gone (kostka's worker sees it as a lost piece).
+- **Failures**: `stopNode(n)` stops a node just before the next thing happens: its
+  events not yet delivered are lost with it, and kostka's coordinator gets
+  `WorkerGone`.
 - **Table storage**: data files are read from shared storage (storage time).
-- **Settings**: workers (1–8), memory per worker (default 2 MB), disk per worker
-  (default 16 MB), an IO profile (cloud, fast, slow, none: bandwidth and latency of
-  shared storage, local disk and network), batch rows (the size of a batch, and of
-  the pieces a sink writes; default 4,096), split rows, CPU time (measured or
-  model). The small memory default makes the larger examples spill now and then.
+- **Settings** (`config.ts`): nodes (1–8; `workers` is another name for it), cores
+  per node (default 1; kostka uses core 0 only), memory per node (default 2 MB),
+  disk per node (default 16 MB), an IO profile (cloud, fast, slow, none: bandwidth
+  and latency of shared storage, local disk and network), batch rows (the size of a
+  batch, and of the pieces a sink writes; default 4,096), split rows, CPU time
+  (measured or model). The small memory default makes the larger examples spill now
+  and then.
 
-### The Execution API (`runtime.ts`)
+### The Execution API (`execution/engine.ts`, `execution/registry.ts`)
 
-A compiled query's `start()` creates an `Execution` (`SimExecution`: the
-coordinator, the workers and the simulation above):
+An engine, and what starting a query on it gives:
 
 ```ts
+interface Engine {
+  name: string; label: string;              // "kostka", "kostka (pipelines)"
+  steps: StepKindInfo[];                    // its kinds of step: who takes them, labels, docs
+  unitSteps: string[];                      // the steps where a unit ran ("process")
+  start(q: { optimized, reader, cluster, settings }): Execution;  // plans; runs nothing
+}
+
 interface Execution {
-  readonly done: boolean; readonly elapsedNs: number;
+  readonly engine: string; readonly done: boolean; readonly elapsedNs: number;
   step(): Promise<boolean>;      // the next step
-  wave(): Promise<number>;       // steps until each worker ran one split
-  runConcurrent(): Promise<void> // until the pipelines running now are done
+  wave(): Promise<number>;       // steps until each node ran one unit
+  runConcurrent(): Promise<void> // until the work running now is done
   run(): Promise<Row[]>;
-  stopWorker(w: number): void;   // a failure, now: WorkerGone
-  result(): Row[];
-  readonly events: readonly ExecEvent[];  // every step so far
-  state(at?: number): Record<string, unknown>;  // the workbench's view after step `at`
-  progress(): { done: number; total: number };  // splits
+  stopNode(n: number): void;     // a failure, now
+  result(): Row[]; rows(): readonly Row[];
+  explain(): string;             // the engine's physical plan, as text
+  readonly events: readonly ExecEvent[];  // every step so far; the first is there at once
+  state(at?: number): ExecState;          // the query right after step `at`, plain data
+  progress(): { done: number; total: number };
 }
 ```
 
+`ExecState` has what every engine shows: `engine`, `at`, `events`, `event`, `done`,
+`failed`, `elapsed_ms`, `next`, `cluster`, `nodes` (each node's frame: status, each
+core's clock, time by category, bytes, memory and disk), `units` (each unit on its
+node and core: start, end, label, group, failure, segments) and `result_rows`; then
+the engine's own objects (kostka: pipelines, splits, buffers, filters, the log).
+`Engines` (`registry.ts`) holds the engines a Database was given, by name.
+
+kostka's `SimExecution` is its coordinator, its workers and the simulation above;
+`stopWorker(w)` is another name for `stopNode(w)` there.
+
 Nothing runs until it is stepped. The history is the message log, grouped into
-**steps** (`ExecEvent`: seq, simulated ms, kind, text, the worker, pipeline, split,
-buffer and partition it concerns, and its messages). Splits are the units of work,
-so steps are about splits:
+**steps** (`ExecEvent`: seq, simulated ms, kind, text, the node it happened on (null
+for the scheduler), `refs`: what it concerns in the engine's terms (kostka: pipeline,
+split, buffer, partition), and its messages). kostka's splits are its units of work,
+so its steps are about splits:
 
 | step | messages |
 |---|---|
@@ -650,20 +709,22 @@ the step it appeared at, values that change keep their history by step, and the
 rest is kept per step as a frame that shares what the step did not touch with the
 frame before.
 
-## Engine (`engine/`)
+## API (`api/`)
 
 - **CompiledQuery** (`query.ts`): SQL → logical (analyzer) → optimized (rules, with
-  the trace and timings) → physical plan → an Execution.
-  `phases` records the real time of parse, analyze, optimize and physical planning.
-  Options: `rules`, `cluster`, `planner`. The physical plan is
-  immutable: every `start()` runs it afresh on a new coordinator and workers.
-- **Database** (`database.ts`), on any `SqlDb` and `FileStore`:
-  tables (`listTables`, `describe`, `files`, `history`, `createTable`, `dropTable`,
+  the trace and timings) → an Execution on its engine. `phases` records the real
+  time of parse, analyze, optimize and the engine's planning ("physical").
+  Options: `rules`, `engine` (by name), `settings` (the engine's own; `planner` is
+  another name for them), `cluster` (`nodes`, or `workers`, and the rest of the
+  cluster's settings). The optimized plan is immutable: every `start()` plans and
+  runs it afresh.
+- **Database** (`database.ts`), on any `SqlDb` and `FileStore`, with the engines it is
+  given: tables (`listTables`, `describe`, `files`, `history`, `createTable`, `dropTable`,
   `writer`, `append`, `replace`, `revert`, the `file_rows` setting), loaders
   (`inferCsv`, `importCsv`, `defaultGenerators`, `generate`, `loadSample`,
   `loadTpcds`, `loadSsb`, `loadTaxi`) and queries (`compile`, `query` → `{columns, rows}`).
-- `openDatabase(folder?)` (`node.ts`): the catalog in `node:sqlite`, data files in the
-  folder; in memory without one.
+- `openDatabase(folder?)` (`src/node.ts`): the catalog in `node:sqlite`, data files in
+  the folder (in memory without one), and every engine.
 
 ## Workbench (`ui/`, built into `docs/`)
 
@@ -672,14 +733,16 @@ it. Catalog and data files live in OPFS, so tables survive a reload; where OPFS 
 not available (another tab holds it, a private window) everything is in memory.
 
 - **Session** (`session.ts`) answers the page with JSON-friendly values: reference
-  data (`info`: storage, rules, cluster options, types, generators, TPC-DS scales,
-  examples, functions;
+  data (`info`: storage, engines (with their kinds of step), rules, cluster options,
+  types, generators, TPC-DS scales, examples, functions;
   `schema` for completion), tables (`tables`, `table` at any version, create, drop,
   revert, settings), loaders with progress events, and queries: `check(sql)` (parse
   and analyze for the editor), `compile`, `step(from)` (the next step after
   `from`, running the simulation only when that step has not happened yet),
-  `next(from)` (the next split processed), `wave`, `finish`, `run`,
-  `stopWorker(w)` (a failure at the latest step), `state(at)` (after any step),
+  `next(from)` (the next step where a unit ran, by the engine's `unitSteps`: for
+  kostka, the next split processed), `wave`, `finish`, `run`,
+  `stopNode(n)` (a failure at the latest step), `state(at)` (the engine's state after
+  any step, with the error and the first result rows),
   `close`. Answers carry the state, its step and the steps the
   page does not have yet.
 - **RPC** (`rpc.ts`, `worker.ts`): `{id, name, args}` → `{id, ok, value | error}`, with
@@ -720,7 +783,7 @@ not available (another tab holds it, a private window) everything is in memory.
   each pipeline's splits as a grid colored by status and worker; each output
   buffer as partitions × outputs, by holder, with owners and lost outputs;
   lineage: hover a split or an output to see what it reads and what reads it;
-  runtime filters), workers (a timeline lane per worker, time by category, memory,
+  runtime filters), workers (the timeline, time by category, memory,
   disk and cached tables, and a button to stop a worker), steps (the list,
   filtered by kind, each with its commands and events; click one to go to it),
   trace (one Gantt tree on one time axis from the start of parsing: parse,
@@ -729,7 +792,12 @@ not available (another tab holds it, a private window) everything is in memory.
   execution goes down to pipelines and then workers, each split a bar in its
   pipeline's color, of 20)
   and result. All of them
-  show the query as it was right after the step chosen.
+  show the query as it was right after the step chosen. The timeline has a row per
+  node and a lane per core in it; a unit's time waiting for the node's IO channel is
+  hatched. Plan, steps, trace, the timeline and result are shared by every engine
+  (`app/timeline.tsx`, `events.tsx`, `trace.tsx`); program, query state and workers
+  are kostka's own (`app/engines/kostka/`), and the query tab picks an engine's views
+  by `state.engine` (`app/engines/index.ts`).
 
 `npm run dev` rebuilds on every change and serves `docs/` on http://127.0.0.1:8765
 (unminified, with source maps). `npm run build` bundles `src/ui/main.tsx` → `docs/app.js` and `src/ui/worker.ts` →
@@ -741,6 +809,10 @@ and copies `sqlite3.wasm`, the stylesheet and `index.html`.
 `node --test`, mirroring `src/`. Query results are checked against SQLite
 (`node:sqlite`) on the same rows: hand-written queries over small tables, and every
 NYC taxi, SSB and TPC-DS example on 1, 4 and 8 workers, ignoring row order unless the query sorts.
+kostka's steps and rows are checked against a fixture recorded before the engine seam
+(`test/fixtures/golden-kostka.json`), on 1 and 2 cores. A toy engine registered only
+in the tests runs through the Database and the Session, the cluster's parts have
+unit tests with no engine, and a test checks that the shared layers import no engine.
 Also: functions and casts (including int overflow), the parser and analyzer (errors
 and their spans), each optimizer rule, execution (the protocol's order, partition
 owners and moves, cutting splits from outputs, self-contained splits, limits,

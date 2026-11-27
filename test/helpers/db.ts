@@ -1,7 +1,7 @@
 // A Database in memory with a few small tables, and a SQLite copy of them.
 import { DatabaseSync } from "node:sqlite";
-import { openDatabase } from "../../src/engine/node.ts";
-import type { Database } from "../../src/engine/database.ts";
+import { openDatabase } from "../../src/node.ts";
+import type { Database } from "../../src/api/database.ts";
 import type { Value } from "../../src/core/types.ts";
 
 export async function tables(defs: Record<string, { columns: [string, string][]; rows: Value[][] }>, fileRows = 4): Promise<Database> {

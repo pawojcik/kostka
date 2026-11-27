@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { before, describe, test } from "node:test";
 import { AnalysisError, ExecutionError } from "../../src/core/errors.ts";
 import { daysOf, parseTimestamp } from "../../src/core/types.ts";
-import type { Database } from "../../src/engine/database.ts";
+import type { Database } from "../../src/api/database.ts";
 import { rows, tables } from "../helpers/db.ts";
 
 describe("scalar functions and operators", () => {

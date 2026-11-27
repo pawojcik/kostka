@@ -335,6 +335,7 @@ details.panel > summary { cursor: pointer; }
 .tline.compact .tlt > i { top: 1px; bottom: 1px; border-radius: 2px; }
 .tlt > i:hover, .tlt > i.hl { outline: 2px solid var(--ink); z-index: 2; }
 .tlt > i.failed { outline: 2px solid var(--bad); }
+.tlt > i > b.wait { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(45deg, rgba(0, 0, 0, .45) 0 2px, transparent 2px 5px); pointer-events: none; }
 .tnow { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--ink); z-index: 3; pointer-events: none; }
 .tlane.axis .tlt { background: none; height: 14px; overflow: visible; }
 /* memory and disk strips: the capacity, items as wide as their bytes */
@@ -399,8 +400,8 @@ table.data tr.hl td { background: var(--accent-bg); }
 
 /* steps: kind chips by who acts, the banner of the step shown, the list, messages */
 .ev { display: inline-block; font-size: 10.5px; font-weight: 500; padding: 0 6px; border-radius: 9px; line-height: 17px; white-space: nowrap; }
-.ev-coordinator { background: var(--skip-bg); color: var(--skip); }
-.ev-worker { background: var(--accent-bg); color: var(--accent-ink); }
+.ev-scheduler { background: var(--skip-bg); color: var(--skip); }
+.ev-node { background: var(--accent-bg); color: var(--accent-ink); }
 .ev-data { background: var(--warn-bg); color: var(--warn); }
 .ev.bad { background: var(--bad-bg); color: var(--bad); }
 .evbanner { gap: 4px; padding: 6px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--surface-2); font-size: 13px; }

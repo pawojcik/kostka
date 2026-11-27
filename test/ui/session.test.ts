@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { openDatabase } from "../../src/engine/node.ts";
+import { openDatabase } from "../../src/node.ts";
 import { Session } from "../../src/ui/session.ts";
 
 describe("workbench session", () => {
@@ -34,9 +34,9 @@ describe("workbench session", () => {
     assert.equal((sp.state as any).event.kind, "process");
     known += sp.events.length;
     await s.wave("q1", known);
-    const gone = await s.stopWorker("q1", 1, 0);
+    const gone = await s.stopNode("q1", 1, 0);
     assert.ok(gone.events.some((e: any) => e.kind === "worker_gone"));
-    assert.equal((gone.state as any).members[1].status, "gone");
+    assert.equal((gone.state as any).nodes[1].status, "gone");
     const r = await s.run("q1", 0);
     assert.equal(r.events.length, r.total, "all steps, from the first");
     assert.ok(r.events.some((e: any) => e.messages.some((m: any) => m.type === "AddSplits")));
@@ -45,6 +45,19 @@ describe("workbench session", () => {
     assert.equal(st.result.total, 13); // 12 cities and NULL
     assert.ok(st.pipelines.some((p: any) => p.ops.some((o: any) => o.node !== null)));
     structuredClone(st);
+    // every state has the engine and the shared fields, and is plain data (ADR 0001)
+    for (let at = 0; at < r.total; at += 5) {
+      const x = s.state("q1", at);
+      for (const k of ["engine", "at", "events", "event", "done", "failed", "elapsed_ms", "next", "cluster", "nodes", "units", "result_rows", "error", "result"]) assert.ok(k in x, `${k} at step ${at}`);
+      assert.equal(x.engine, "kostka");
+      assert.equal(x.nodes.length, 2);
+      assert.deepEqual(structuredClone(x), x);
+    }
+    // a plan node's id is the same in the plan tree and in the operators that run it
+    const ids = new Set<number>();
+    const walk = (n: any) => { ids.add(n.id); n.children.forEach(walk); };
+    walk(plans.optimized);
+    assert.ok(st.pipelines.every((p: any) => p.ops.every((o: any) => o.node === null || ids.has(o.node))));
     const first = s.state("q1", 0) as any;
     assert.equal(first.units_run, 0);
     assert.equal(first.result.total, 0);

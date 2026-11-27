@@ -61,8 +61,8 @@ const hasRule = (t: Run, rule: string) => !!t.q?.options.rules.includes(rule);
 const stageOf = (rule: string) => (S.info?.rules ?? []).findIndex((r: Json) => r.name === rule) + 1;
 const optionsOpen = () => !!(document.querySelector("[data-tour=options]") as HTMLDetailsElement | null)?.open;
 const sub = (t: Run, k: string) => t.q?.sub === k;
-const gone = (t: Run): number[] => (latest(t)?.members ?? []).map((m: Json, i: number) => (m.status === "gone" ? i : -1)).filter((i: number) => i >= 0);
-const upWorkers = (t: Run): number[] => (latest(t)?.workers ?? []).map((w: Json) => w.worker).filter((w: number) => latest(t)?.members?.[w]?.status !== "gone");
+const gone = (t: Run): number[] => (latest(t)?.nodes ?? []).filter((m: Json) => m.status === "gone").map((m: Json) => m.node);
+const upWorkers = (t: Run): number[] => (latest(t)?.nodes ?? []).filter((m: Json) => m.status !== "gone").map((m: Json) => m.worker);
 
 const B = ({ children }: { children: ComponentChildren }) => <b>{children}</b>;
 
@@ -278,7 +278,7 @@ async function start(sc: Scenario): Promise<void> {
     }
     const ex = (S.info?.examples ?? []).find((e: Json) => e.id === sc.example);
     const q = newQuery(ex.sql, sc.name);
-    q.options.cluster.workers = sc.workers;
+    q.options.cluster.nodes = sc.workers;
     t.q = q;
     t.preparing = null;
     enterStep(t);

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { before, describe, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { openDatabase } from "../../src/engine/node.ts";
-import type { Database } from "../../src/engine/database.ts";
+import { openDatabase } from "../../src/node.ts";
+import type { Database } from "../../src/api/database.ts";
 import { QUERIES } from "../../src/loaders/ssb/queries.ts";
 import { SCHEMA, TABLES, rowCounts } from "../../src/loaders/ssb/generate.ts";
 import { assertRows } from "../helpers/compare.ts";

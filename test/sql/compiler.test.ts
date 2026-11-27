@@ -3,7 +3,7 @@ import { before, describe, test } from "node:test";
 import { AnalysisError, ParseError } from "../../src/core/errors.ts";
 import { parse } from "../../src/sql/parser.ts";
 import { explain } from "../../src/sql/plan.ts";
-import type { Database } from "../../src/engine/database.ts";
+import type { Database } from "../../src/api/database.ts";
 import { tables } from "../helpers/db.ts";
 
 let db: Database;
@@ -72,7 +72,7 @@ describe("analyzer", () => {
   test("each table is pinned to one snapshot, also when read twice", async () => {
     const q = db.compile("select a.k from tiny a join tiny b on a.k = b.k");
     await db.append("tiny", [[3]]);
-    const { execution } = q.start();
+    const execution = q.start();
     assert.deepEqual((await execution.run()).map((r) => r[0]).sort(), [1, 2]);
   });
 });

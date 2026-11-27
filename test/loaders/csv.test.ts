@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { csvRows, formatParser, inferCsv, parseCsv } from "../../src/loaders/csv.ts";
-import { openDatabase } from "../../src/engine/node.ts";
+import { openDatabase } from "../../src/node.ts";
 import { SchemaError } from "../../src/core/errors.ts";
 import { daysOf } from "../../src/core/types.ts";
 import { generateRows, defaultGenerator } from "../../src/loaders/generators.ts";

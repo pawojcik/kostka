@@ -6,10 +6,11 @@
 //     SchemaError           a bad table definition, row or CSV value on load
 //     SqlError              a query that cannot run: ParseError (syntax), AnalysisError
 //                           (unknown names, type errors, misplaced aggregates)
+//     UnknownEngineError    a query named an engine there is none of
 //     ExecutionError        runtime errors: division by zero, bad casts, int overflow
 //       CommitConflictError an append or replace kept losing races with other writers
-//       OutOfMemoryError    a simulated worker could not fit a hash table or groups
-//       OutOfDiskError      a simulated worker's disk could not take a spilled piece
+//       OutOfMemoryError    a simulated node could not fit a hash table or groups
+//       OutOfDiskError      a simulated node's disk could not take a spilled block
 
 export class KostkaError extends Error {
   override name = "KostkaError";
@@ -46,6 +47,10 @@ export class ParseError extends SqlError {
 }
 export class AnalysisError extends SqlError {
   override name = "AnalysisError";
+}
+
+export class UnknownEngineError extends KostkaError {
+  override name = "UnknownEngineError";
 }
 
 export class ExecutionError extends KostkaError {

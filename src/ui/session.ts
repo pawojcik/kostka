@@ -1,9 +1,11 @@
 // What the workbench asks of the engine. A Session runs next to the Database (in the
 // browser, in a Web Worker; in tests, in Node) and answers with plain JSON-friendly
 // objects: tables, loaders, and queries that are compiled once and then stepped.
-// A query's history is its execution's steps (the coordinator's and the workers'
-// messages, grouped): the page can show the state right after any of them, and Step
-// moves one step on (running the simulation only when it has seen all steps so far).
+// A query's history is its execution's steps (a scheduler's decisions and the units
+// run on nodes, with their messages): the page can show the state right after any of
+// them, and Step moves one step on (running the simulation only when it has seen all
+// steps so far). The Session knows engines only through execution/engine.ts: an
+// engine's own objects pass through in its state, for the engine's own views.
 
 import { KostkaError, SqlError } from "../core/errors.ts";
 import { COLUMN_TYPES, type ColumnType, type Value } from "../core/types.ts";
@@ -11,15 +13,12 @@ import { allFunctions } from "../core/functions/registry.ts";
 import { allAggregates } from "../core/functions/aggregates.ts";
 import { parse } from "../sql/parser.ts";
 import { analyze } from "../sql/analyzer.ts";
-import type { PlanNode } from "../sql/plan.ts";
+import { planIds, type PlanNode } from "../sql/plan.ts";
 import { Estimator } from "../sql/optimizer/cardinality.ts";
-import { ALL_RULES, type CompiledQuery, type QueryOptions } from "../engine/query.ts";
-import type { Database } from "../engine/database.ts";
-import type { PhysicalPlan } from "../physical/pipeline.ts";
-import type { PhysicalOperator, Sink } from "../physical/operator.ts";
-import type { EventKind, Execution } from "../execution/runtime.ts";
-import { toJson } from "../core/json.ts";
-import { CPU_MODES, IO_PROFILES, MEMORY_OPTIONS_MB, DISK_OPTIONS_MB, BATCH_SIZES, WORKER_COUNTS, DEFAULT_CLUSTER } from "../execution/cluster.ts";
+import { ALL_RULES, type CompiledQuery, type QueryOptions } from "../api/query.ts";
+import type { Database } from "../api/database.ts";
+import type { ExecState, Execution } from "../execution/engine.ts";
+import { CPU_MODES, IO_PROFILES, MEMORY_OPTIONS_MB, DISK_OPTIONS_MB, BATCH_SIZES, NODE_COUNTS, DEFAULT_CLUSTER } from "../cluster/config.ts";
 import { GENERATOR_KINDS, type Generator } from "../loaders/generators.ts";
 import type { CsvColumn, CsvOptions } from "../loaders/csv.ts";
 import { QUERIES } from "../loaders/tpcds/queries.ts";
@@ -43,11 +42,12 @@ export interface TreeNode {
   children: TreeNode[];
 }
 
-/** Plan trees as JSON; `ids` numbers the nodes so operators can point at them. */
-export function planTree(root: PlanNode, ids = new Map<PlanNode, number>()): TreeNode {
+/** A plan tree as JSON, its nodes numbered by planIds: an engine's operators name the
+ * optimized plan's nodes by the same numbers. */
+export function planTree(root: PlanNode): TreeNode {
   const est = new Estimator();
+  const ids = planIds(root);
   const walk = (n: PlanNode): TreeNode => {
-    if (!ids.has(n)) ids.set(n, ids.size);
     let estimate = -1;
     try {
       estimate = Math.round(est.rows(n));
@@ -55,7 +55,7 @@ export function planTree(root: PlanNode, ids = new Map<PlanNode, number>()): Tre
       // no estimate for this node
     }
     return {
-      id: ids.get(n)!, kind: n.kind, detail: n.detail(), estimate,
+      id: ids.get(n) ?? -1, kind: n.kind, detail: n.detail(), estimate,
       columns: n.schema.map((f) => ({ name: f.label(), type: f.type })), children: n.children().map(walk),
     };
   };
@@ -65,9 +65,7 @@ export function planTree(root: PlanNode, ids = new Map<PlanNode, number>()): Tre
 interface OpenQuery {
   id: string;
   compiled: CompiledQuery;
-  physical: PhysicalPlan;
   execution: Execution;
-  nodeIds: Map<PlanNode, number>;
   error: string | null;
 }
 
@@ -88,9 +86,10 @@ export class Session {
   info() {
     return {
       storage: this.storage,
+      engines: this.db.engines.all().map((e) => ({ name: e.name, label: e.label, steps: e.steps, unitSteps: e.unitSteps })),
       rules: ALL_RULES.map((r) => ({ name: r.name, doc: r.doc, cls: r.constructor.name })),
       cluster: {
-        defaults: DEFAULT_CLUSTER, workers: WORKER_COUNTS, memory: MEMORY_OPTIONS_MB, disk: DISK_OPTIONS_MB, batches: BATCH_SIZES,
+        defaults: DEFAULT_CLUSTER, nodes: NODE_COUNTS, memory: MEMORY_OPTIONS_MB, disk: DISK_OPTIONS_MB, batches: BATCH_SIZES,
         io: Object.values(IO_PROFILES).map((p) => ({ name: p.name, label: p.label })),
         cpu: CPU_MODES,
       },
@@ -259,10 +258,9 @@ export class Session {
   compile(qid: string, sql: string, o: CompileOptions = {}) {
     this.queries.delete(qid);
     const compiled = this.db.compile(sql, o);
-    const { physical, execution } = compiled.start();
-    const nodeIds = new Map<PlanNode, number>();
-    const q: OpenQuery = { id: qid, compiled, physical, execution, nodeIds, error: null };
-    const optimized = planTree(compiled.optimized, nodeIds);
+    const execution = compiled.start();
+    const q: OpenQuery = { id: qid, compiled, execution, error: null };
+    const optimized = planTree(compiled.optimized);
     this.queries.set(qid, q);
     const t0 = compiled.phases[0]?.start ?? 0;
     const plans = {
@@ -273,7 +271,8 @@ export class Session {
       phases: compiled.phases.map((p) => ({ phase: p.phase, start: p.start - t0, end: p.end - t0 })),
       timings: compiled.timings.map((t) => ({ rule: t.rule, iteration: t.iteration, start: t.start - t0, end: t.end - t0, changed: t.changed })),
       columns: compiled.columns.map((c) => ({ name: c.name, type: c.type })),
-      explain: physical.explain(),
+      engine: compiled.engine.name,
+      explain: execution.explain(),
       cluster: compiled.cluster,
     };
     return { plans, ...this.answer(q, execution.events.length - 1, 0) };
@@ -317,9 +316,11 @@ export class Session {
     return this.answer(q, Math.min(at, this.last(q)), known);
   }
 
-  /** The next step of one of these kinds after `from` (default: a split processed). */
-  async next(qid: string, from?: number, known = 0, kinds: EventKind[] = ["process"]) {
+  /** The next step of one of these kinds after `from` (default: the engine's steps
+   * where a unit of work ran). */
+  async next(qid: string, from?: number, known = 0, given?: readonly string[]) {
     const q = this.get(qid);
+    const kinds = given ?? q.compiled.engine.unitSteps;
     const start = (from ?? this.last(q)) + 1;
     const find = () => q.execution.events.findIndex((e, i) => i >= start && kinds.includes(e.kind));
     await this.until(q, () => find() >= 0);
@@ -349,11 +350,11 @@ export class Session {
     return this.act(qid, known, (e) => e.run(this.ticker(qid, progress)));
   }
 
-  /** A failure: worker `w` stops now (only at the latest step, while the query runs).
-   * The coordinator handles WorkerGone at once, so its step comes back. */
-  stopWorker(qid: string, w: number, known = 0) {
+  /** A failure: node `n` stops now (only at the latest step, while the query runs).
+   * The engine's scheduler handles it at once, so its step comes back. */
+  stopNode(qid: string, n: number, known = 0) {
     const q = this.get(qid);
-    q.execution.stopWorker(w);
+    q.execution.stopNode(n);
     return this.answer(q, this.last(q), known);
   }
 
@@ -378,27 +379,15 @@ export class Session {
     this.queries.delete(qid);
   }
 
-  /** Everything the query views show, right after step `at`. */
-  private snapshot(q: OpenQuery, at: number) {
-    const st = q.execution.state(at) as Record<string, unknown>;
-    const opNode = (op: PhysicalOperator) => (op.planNode ? (q.nodeIds.get(op.planNode) ?? null) : null);
-    const pipelines = (st.pipelines as Record<string, unknown>[]).map((p, i) => ({
-      ...p,
-      ops: (p.ops as Record<string, unknown>[]).map((o, j) => {
-        const op = q.physical.pipelines[i]!.chain[j]!;
-        return {
-          ...o, node: opNode(op), state: toJson(o.state),
-          reads: op.reads().map((x) => x.index), writes: "writes" in op ? ((op as Sink).writes()?.index ?? null) : null,
-          role: j === 0 ? "source" : j === q.physical.pipelines[i]!.chain.length - 1 ? "sink" : "operator",
-        };
-      }),
-    }));
-    const total = st.result_rows as number;
-    const failed = st.failed as { error: string } | null;
+  /** Everything the query views show, right after step `at`: the engine's state, the
+   * error if the query failed, and the first result rows. */
+  private snapshot(q: OpenQuery, at: number): ExecState & { error: string | null; result: { rows: Value[][]; total: number } } {
+    const st = q.execution.state(at);
+    const total = st.result_rows;
     const latest = at >= this.last(q);
     return {
-      ...st, pipelines, error: failed?.error ?? (latest ? q.error : null),
-      result: { rows: q.execution.rows().slice(0, Math.min(total, MAX_RESULT_ROWS)) as Value[][], total },
+      ...st, error: st.failed?.error ?? (latest ? q.error : null),
+      result: { rows: q.execution.rows().slice(0, Math.min(total, MAX_RESULT_ROWS)).map((r) => [...r]), total },
     };
   }
 }

@@ -7,11 +7,10 @@ import { S, defaultOptions, noteAction, shownState, toast, update, type Json, ty
 import { Editor, DataTable, ProgressBar } from "./widgets.tsx";
 import { Spinner } from "./logo.tsx";
 import { PlanView } from "./plans.tsx";
-import { ProgramView } from "./program.tsx";
-import { WorkersView, Timeline } from "./workers.tsx";
+import { Timeline } from "./timeline.tsx";
 import { TraceView } from "./trace.tsx";
 import { EventBanner, EventsView } from "./events.tsx";
-import { QueryStateView } from "./state.tsx";
+import { viewsOf } from "./engines/index.ts";
 import { ms, n } from "./format.ts";
 
 const check = (sql: string) => call("check", sql);
@@ -95,7 +94,7 @@ function open(): void {
 
 function compileOptions(q: Query) {
   const o = q.options;
-  return { rules: o.rules, cluster: o.cluster, planner: { shufflePartitions: o.planner.shufflePartitions, joinStrategy: o.planner.joinStrategy, runtimeFilters: o.planner.runtimeFilters } };
+  return { rules: o.rules, cluster: o.cluster, settings: { shufflePartitions: o.planner.shufflePartitions, joinStrategy: o.planner.joinStrategy, runtimeFilters: o.planner.runtimeFilters } };
 }
 
 export async function compile(q: Query): Promise<void> {
@@ -182,7 +181,7 @@ function Controls({ q }: { q: Query }) {
   // Step and Next split also move through steps that already happened.
   const canStep = !!st && !stale && !S.busy && (q.at !== null || canRun);
   const set = (fn: () => void) => { fn(); update(); };
-  const parts = o.planner.shufflePartitions === "auto" ? 2 * o.cluster.workers : o.planner.shufflePartitions;
+  const parts = o.planner.shufflePartitions === "auto" ? 2 * o.cluster.nodes : o.planner.shufflePartitions;
   const size = (mb: number) => (mb < 1 ? `${mb * 1024} KB` : mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`);
   const sel = (label: string, value: string | number, options: [string | number, string][], onChange: (v: string) => void) => (
     <label class="field">{label}
@@ -192,7 +191,7 @@ function Controls({ q }: { q: Query }) {
   return (
     <div class="stack">
       <details class="compile" data-tour="options">
-        <summary>Options · {o.rules.length} of {info.rules.length} rules · {o.planner.joinStrategy} joins, {parts} partitions{o.planner.runtimeFilters ? ", runtime filters" : ""} · {o.cluster.workers} worker{o.cluster.workers === 1 ? "" : "s"} × {size(o.cluster.memoryMB)} memory, {size(o.cluster.diskMB)} disk, {o.cluster.io} IO · {n(o.cluster.batchRows)}-row batches · {o.cluster.cpu === "measured" ? "measured" : "modelled"} CPU</summary>
+        <summary>Options · {o.rules.length} of {info.rules.length} rules · {o.planner.joinStrategy} joins, {parts} partitions{o.planner.runtimeFilters ? ", runtime filters" : ""} · {o.cluster.nodes} worker{o.cluster.nodes === 1 ? "" : "s"} × {size(o.cluster.memoryMB)} memory, {size(o.cluster.diskMB)} disk, {o.cluster.io} IO · {n(o.cluster.batchRows)}-row batches · {o.cluster.cpu === "measured" ? "measured" : "modelled"} CPU</summary>
         <div class="ogroups">
           <section class="ogroup" data-tour="rules">
             <h4>1 · Optimizer rules <span class="faint">the logical plan</span></h4>
@@ -216,7 +215,7 @@ function Controls({ q }: { q: Query }) {
               <div class="rule" data-tour="joins"><span><b>join distribution</b><span class="doc">Broadcast copies the build side to every worker; shuffle partitions both sides by the join keys. Auto broadcasts when (workers − 1) × build rows ≤ probe rows.</span>
                 {sel("", o.planner.joinStrategy, [["auto", "auto (by estimate)"], ["broadcast", "broadcast"], ["shuffle", "shuffle"]], (v) => set(() => (o.planner.joinStrategy = v as never)))}</span></div>
               <div class="rule"><span><b>shuffle partitions</b><span class="doc">Partitions of every shuffle (aggregates and shuffle joins). Each has one owner worker; auto gives each worker two.</span>
-                {sel("", o.planner.shufflePartitions, [["auto", `auto (2 × workers = ${2 * o.cluster.workers})`], ...[1, 2, 4, 8, 16, 32].map((m) => [m, String(m)] as [number, string])], (v) => set(() => (o.planner.shufflePartitions = v === "auto" ? "auto" : Number(v))))}</span></div>
+                {sel("", o.planner.shufflePartitions, [["auto", `auto (2 × workers = ${2 * o.cluster.nodes})`], ...[1, 2, 4, 8, 16, 32].map((m) => [m, String(m)] as [number, string])], (v) => set(() => (o.planner.shufflePartitions = v === "auto" ? "auto" : Number(v))))}</span></div>
               <label class="rule" data-tour="runtime-filters"><input type="checkbox" checked={o.planner.runtimeFilters} onChange={(e) => set(() => (o.planner.runtimeFilters = (e.target as HTMLInputElement).checked))} />
                 <span><b>runtime filters</b><span class="doc">When a hash join's build pipeline is done, its keys skip probe-side files whose statistics miss them, and drop probe rows that cannot match right after the scan.</span></span></label>
             </div>
@@ -225,7 +224,7 @@ function Controls({ q }: { q: Query }) {
             <h4>3 · Cluster <span class="faint">the machines</span></h4>
             <p class="note">Output waiting for the next pipeline spills to disk when memory runs short; a full disk fails the query, and so does a hash table or aggregate that doesn't fit in memory.</p>
             <div class="row">
-              {sel("Workers", o.cluster.workers, info.cluster.workers.map((w: number) => [w, String(w)]), (v) => set(() => (o.cluster.workers = Number(v))))}
+              {sel("Workers", o.cluster.nodes, info.cluster.nodes.map((w: number) => [w, String(w)]), (v) => set(() => (o.cluster.nodes = Number(v))))}
               {sel("Memory per worker", o.cluster.memoryMB, info.cluster.memory.map((m: number) => [m, size(m)]), (v) => set(() => (o.cluster.memoryMB = Number(v))))}
               {sel("Disk per worker", o.cluster.diskMB, info.cluster.disk.map((m: number) => [m, size(m)]), (v) => set(() => (o.cluster.diskMB = Number(v))))}
               {sel("IO speeds", o.cluster.io, info.cluster.io.map((p: Json) => [p.name, p.label]), (v) => set(() => (o.cluster.io = v)))}
@@ -282,10 +281,13 @@ function running(st: Json): string {
   return r.map((p: Json) => `P${p.index}`).join(", ");
 }
 
-const SUBTABS: [SubTab, string][] = [["plan", "Plan"], ["program", "Program"], ["state", "Query state"], ["workers", "Workers"], ["events", "Steps"], ["trace", "Trace"], ["result", "Result"]];
 
 export function QueryTab({ q }: { q: Query }) {
   const state = shownState(q);
+  const views = state ? viewsOf(state.engine) : null;
+  // the shared tabs, with the engine's own after Plan
+  const tabs: [SubTab, string][] = [["plan", "Plan"], ...(views?.tabs ?? []).map((t): [SubTab, string] => [t.key, t.label]), ["events", "Steps"], ["trace", "Trace"], ["result", "Result"]];
+  const own = views?.tabs.find((t) => t.key === q.sub);
   return (
     <div class="stack">
       <section class="panel stack" data-tour="query">
@@ -296,15 +298,13 @@ export function QueryTab({ q }: { q: Query }) {
       </section>
       {q.plans && state && (
         <section class="panel stack">
-          <div class="subtabs">{SUBTABS.map(([k, l]) => <button data-tour={`sub-${k}`} class={q.sub === k ? "on" : ""} onClick={() => { q.sub = k; update(); }}>{l}{k === "result" && state.done ? ` (${n(state.result.total)})` : ""}</button>)}</div>
+          <div class="subtabs">{tabs.map(([k, l]) => <button data-tour={`sub-${k}`} class={q.sub === k ? "on" : ""} onClick={() => { q.sub = k; update(); }}>{l}{k === "result" && state.done ? ` (${n(state.result.total)})` : ""}</button>)}</div>
           {(q.sub !== "plan" || q.planStep === null) && <EventBanner q={q} state={state} />}
           {state.error && <div class="failbox" data-tour="failbox"><b>The query failed</b>{state.failed && <span class="note">in {state.failed.unit}</span>}<span class="mono">{state.error}</span></div>}
           {q.sub !== "workers" && q.sub !== "trace" && q.sub !== "events" && state.units.length > 0 && <Timeline q={q} state={state} compact />}
           {q.sub === "plan" && <PlanView q={q} state={state} />}
-          {q.sub === "program" && <ProgramView q={q} state={state} />}
+          {own && own.view({ q, state })}
           {q.sub === "events" && <EventsView q={q} state={state} go={(k) => showStep(q, k)} />}
-          {q.sub === "state" && <QueryStateView q={q} state={state} />}
-          {q.sub === "workers" && <WorkersView q={q} state={state} />}
           {q.sub === "trace" && <TraceView q={q} state={state} />}
           {q.sub === "result" && (
             <div class="stack" data-tour="result">

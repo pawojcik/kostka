@@ -7,7 +7,7 @@ export type Json = any;
 
 export interface QueryOptions {
   rules: string[];
-  cluster: { workers: number; memoryMB: number; diskMB: number; io: string; batchRows: number; splitRows: number; cpu: "measured" | "model" };
+  cluster: { nodes: number; memoryMB: number; diskMB: number; io: string; batchRows: number; splitRows: number; cpu: "measured" | "model" };
   planner: { shufflePartitions: number | "auto"; joinStrategy: "auto" | "broadcast" | "shuffle"; runtimeFilters: boolean };
 }
 
@@ -103,7 +103,7 @@ export function defaultOptions(info: Json): QueryOptions {
   const d = info.cluster.defaults;
   return {
     rules: info.rules.map((r: Json) => r.name),
-    cluster: { workers: 2, memoryMB: d.memoryMB, diskMB: d.diskMB, io: d.io, batchRows: d.batchRows, splitRows: d.splitRows, cpu: d.cpu },
+    cluster: { nodes: 2, memoryMB: d.memoryMB, diskMB: d.diskMB, io: d.io, batchRows: d.batchRows, splitRows: d.splitRows, cpu: d.cpu },
     planner: { shufflePartitions: "auto", joinStrategy: "auto", runtimeFilters: true },
   };
 }

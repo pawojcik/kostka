@@ -317,3 +317,69 @@ Execution API section documents `Engine`, `ExecState` and the registry.
 ## Open questions
 
 None.
+
+## Corrections
+
+### 2026-11-27: the worker reaches its node's memory and blocks through its own interfaces
+
+- **Assumed:** `MemoryPool` and the block store move to `cluster/`, and kostka's
+  domain is otherwise as today.
+- **True:** the worker owns its `MemoryPool` and its pieces
+  (`src/execution/worker/worker.ts:111`, `new MemoryPool(...)` and
+  `new LocalBuffers(...)`), so a worker that imported them from `cluster/` would make
+  the domain import infrastructure.
+- **So:** a node (in `cluster/`) owns its memory and its block store. The worker
+  defines the small interfaces it needs of them (hold, grow and release memory; put,
+  read and drop a block) and gets the node's through its ports, as it gets its unit
+  context today. A piece is a block plus what kostka knows of it (buffer, partition,
+  split). The README's "a worker decides spilling" becomes "the node's memory decides
+  spilling; the worker says what it holds".
+
+### 2026-11-27: the Execution explains its plan, and the engine numbers plan nodes
+
+- **Assumed:** `Engine.start` and `Execution` (with `state(at)`) are all the Session
+  needs of an engine.
+- **True:** the Session also shows the physical plan as text
+  (`src/ui/session.ts:278`, `physical.explain()`), and it labels each operator with
+  the id of its plan node from a numbering it makes while drawing the plan
+  (`src/ui/session.ts:265` and `:386`).
+- **So:** `Execution` gets `explain(): string`. The numbering of plan nodes becomes
+  one shared function in `sql/plan.ts` (`planIds`), which the Session's plan trees
+  and kostka's state both use, so `Engine.start` needs no map.
+
+### 2026-11-27: only row sizes leave `physical/metrics.ts`
+
+- **Assumed:** `physical/metrics.ts` (row sizes) moves to `cluster/rows.ts`.
+- **True:** it also holds `Metrics`, the counters kostka's operators keep per split
+  (`src/physical/metrics.ts:8`).
+- **So:** `rowsBytes` and the sizes move to `cluster/rows.ts`; `Metrics` stays with
+  kostka's operators.
+
+### 2026-11-27: a Database is given its engines; `openDatabase` moves to `src/node.ts`
+
+- **Assumed:** the registry of engines is in `execution/`, and `engine/node.ts`
+  becomes `api/node.ts`.
+- **True:** a registry that lists the engines imports them, and so does whatever makes
+  a Database with them; in `execution/` or `api/` that breaks exit criterion 4 (no
+  file under `src/execution/` or `src/api/` imports from `src/engines/`).
+- **So:** `execution/registry.ts` holds `Engines`, a set of engines given to it, and a
+  Database is made with one (`new Database(db, store, engines)`). The list of every
+  engine is `src/engines/index.ts`. The two places that make a Database give it that
+  list: `src/node.ts` (`openDatabase`, for tests, tools and the README's example; it
+  replaces `api/node.ts`) and the workbench's worker. A test can give a Database
+  only its own engines, as the toy engine's test does.
+
+### 2026-11-27: smaller points the implementation settled
+
+- **Assumed:** `BlockLostError` replaces `PieceLostError`; `stopWorker` keeps working
+  as an alias.
+- **True:** `BlockLostError` is infrastructure, and kostka's domain must not import
+  it; `stopWorker` on the shared `Execution` would put kostka's word in the seam.
+- **So:** the data plane throws `BlockLostError`; kostka's unit context turns it into
+  `PieceLostError`, the domain's view of the same thing, and the rule is unchanged.
+  `stopWorker` is an alias on kostka's `SimExecution` only; `Execution` and the
+  Session have `stopNode`. `Execution`'s first step is there as soon as it starts
+  (the Session shows it at once). `UnitFrame` also has the unit's `segments`, so the
+  shared timeline can hatch the waits. The node's memory strip stays in kostka's
+  worker cards, not under the timeline's lanes: with it there the Workers tab would
+  no longer look as on `main` (criterion 10).
