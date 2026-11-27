@@ -32,7 +32,9 @@ interface Holding {
   advice: string;
 }
 
-/** The unit running when memory is reserved: it pays for spilling. */
+/** The unit running when memory is reserved: it pays for spilling. (kostka's worker
+ * has an interface of the same name and shape, worker/worker.ts: the domain's own
+ * port, which this one satisfies.) */
 export interface SpillSink {
   /** `bytes` were written to the local disk to make room (or a block went there). */
   spillWrite(bytes: number): void;

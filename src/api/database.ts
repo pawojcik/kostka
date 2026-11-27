@@ -48,11 +48,11 @@ export class Database {
     this.catalog = new Catalog(db);
     this.store = store;
     this.reader = {
-      readFile: async (scan, file) => {
+      readFile: async (table, file) => {
         try {
-          return await store.read(joinPath(scan.meta.location, file.path));
+          return await store.read(joinPath(table.location, file.path));
         } catch (e) {
-          if (e instanceof FileNotFound) throw new TableNotFoundError(`table '${scan.table}' does not exist (its files are gone)`);
+          if (e instanceof FileNotFound) throw new TableNotFoundError(`table '${table.name}' does not exist (its files are gone)`);
           throw e;
         }
       },

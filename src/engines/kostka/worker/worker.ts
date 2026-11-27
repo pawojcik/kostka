@@ -38,7 +38,9 @@ export interface PieceBlock {
   spilled: boolean;
 }
 
-/** The unit running when memory is reserved: it pays for what is spilled. */
+/** The unit running when memory is reserved: it pays for what is spilled. (The
+ * worker's own port; the cluster's memory has one of the same shape, which the
+ * node's memory is written against.) */
 export interface SpillSink {
   /** `bytes` were written to the local disk to make room (or a block went there). */
   spillWrite(bytes: number): void;

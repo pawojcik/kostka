@@ -16,7 +16,7 @@ import { internal } from "../../core/errors.ts";
 import type { Row, Value } from "../../core/types.ts";
 import type { OutputBuffer, PieceRef, Split } from "./physical/buffer.ts";
 import type { Charged, HoldKind } from "./physical/context.ts";
-import { rowsBytes } from "../../cluster/rows.ts";
+import { rowsBytes } from "../../core/rows.ts";
 import type { OperatorInstance, SourceInstance } from "./physical/operator.ts";
 import type { CpuMode } from "../../cluster/config.ts";
 import type { IoCategory, ByteCounter, Unit } from "../../cluster/node.ts";

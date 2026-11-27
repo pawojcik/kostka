@@ -1,5 +1,5 @@
 // Counters each operator keeps per split: rows and batches in and out, bytes, and
-// simulated time by category. (Row sizes are shared by every engine: cluster/rows.ts.)
+// simulated time by category. (Row sizes are shared by every engine: core/rows.ts.)
 
 import type { Batch } from "./batch.ts";
 import { CATEGORIES, type Category } from "./context.ts";

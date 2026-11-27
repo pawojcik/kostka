@@ -26,6 +26,8 @@ export const KOSTKA_VIEWS: EngineViews = {
     label: `P${p.index} ${p.ops.map((o: Json) => o.label.split("(")[0]).join(" → ")}`,
     value: p.end_ms === null ? p.status : ms(p.end_ms - p.start_ms),
   })),
+  running: (state: Json) => state.pipelines.filter((p: Json) => p.status === "running").map((p: Json) => `P${p.index}`).join(", "),
+  stepsNote: <p class="note">The coordinator and the workers talk only by messages: the coordinator sends <b>commands</b> (AddSplits, ReleaseBuffer), the workers answer with <b>events</b> (SplitDone, SplitFailed); the infrastructure says when a worker is gone (WorkerGone). Every step groups the messages of one decision of the coordinator, or of one split a worker ran; a message a gone worker sent that never arrived is shown struck through. The views show the query right after the step chosen here or with the history slider.</p>,
   tabs: [
     { key: "program", label: "Program", view: ({ q, state }) => <ProgramView q={q} state={state} /> },
     { key: "state", label: "Query state", view: ({ q, state }) => <QueryStateView q={q} state={state} /> },

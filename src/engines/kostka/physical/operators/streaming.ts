@@ -5,7 +5,7 @@ import type { Expr, Field } from "../../../../core/expr.ts";
 import type { Row } from "../../../../core/types.ts";
 import { checkColumns, type Batch } from "../batch.ts";
 import type { Charged, ExecContext } from "../context.ts";
-import { COST, exprCost } from "../../../../cluster/cost.ts";
+import { COST, exprCost } from "../../../../core/cost.ts";
 import { Operator, emit, type OperatorInstance } from "../operator.ts";
 import type { RuntimeFilter } from "./runtime-filter.ts";
 

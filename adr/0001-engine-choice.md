@@ -383,3 +383,24 @@ None.
   shared timeline can hatch the waits. The node's memory strip stays in kostka's
   worker cards, not under the timeline's lanes: with it there the Workers tab would
   no longer look as on `main` (criterion 10).
+
+### 2026-11-27: `TableReader` takes the table's metadata, not the scan
+
+- **Assumed:** `TableReader` moves to `src/storage/` as it is,
+  `readFile(scan: ScanInfo, file)`.
+- **True:** `ScanInfo` is in `src/sql/plan.ts`, and `storage/` sits above `sql/` in
+  the layers, so it may not import it (review of #1, finding 1).
+- **So:** `readFile(table: TableMeta, file: DataFile)`: both come from the catalog,
+  which storage may use. A scan passes its table's metadata.
+
+### 2026-11-27: the cost model and row sizes are in `core/`, not `cluster/`
+
+- **Assumed:** `cost.ts` and `rows.ts` go to `cluster/` with the rest of the
+  simulated cluster.
+- **True:** kostka's operators, its domain, price their work with them
+  (`engines/kostka/physical/operators/*.ts`), so in `cluster/` the domain would import
+  infrastructure (review of #1, finding 6).
+- **So:** `core/cost.ts` and `core/rows.ts`. They are models, not infrastructure:
+  plain numbers and functions of values, with no clock, IO or state. The operators
+  and the cluster's memory and blocks both use them, and nothing in an engine's
+  domain imports `cluster/`.

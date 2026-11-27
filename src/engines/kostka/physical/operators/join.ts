@@ -21,9 +21,9 @@ import { tupleKey, type Row, type Value } from "../../../../core/types.ts";
 import type { JoinType } from "../../../../sql/plan.ts";
 import { checkColumns } from "../batch.ts";
 import type { Charged, ExecContext } from "../context.ts";
-import { COST } from "../../../../cluster/cost.ts";
+import { COST } from "../../../../core/cost.ts";
 import type { OutputBuffer } from "../buffer.ts";
-import { ENTRY_OVERHEAD, perRowBytes } from "../../../../cluster/rows.ts";
+import { ENTRY_OVERHEAD, perRowBytes } from "../../../../core/rows.ts";
 import { Operator, emit, type OperatorInstance, type WholeInput } from "../operator.ts";
 
 export class HashTable {

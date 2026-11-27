@@ -4,7 +4,7 @@
 // - Nodes: `nodes` simulated machines, each with `cores` cores (node.ts). An engine
 //   places its own workers on them.
 // - CPU time is measured (the time the engine's code actually ran, with
-//   performance.now()) or, with cpu: "model", computed from the cost model (cost.ts),
+//   performance.now()) or, with cpu: "model", computed from the cost model (core/cost.ts),
 //   which makes every run take the same simulated time.
 // - IO time is computed from bytes and an IOProfile: shared table storage (read by
 //   scans), each node's local disk (spilling) and the network (between nodes, and to

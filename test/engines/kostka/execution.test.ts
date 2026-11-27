@@ -339,6 +339,16 @@ describe("execution: fault tolerance", () => {
     });
   }
 
+  test("stopWorker is kostka's name for stopNode: the worker on that node is gone", async () => {
+    const [sql, o] = queries[2]!;
+    const e = kostka(db.compile(sql, o).start());
+    for (let i = 0; i < 5; i++) await e.step();
+    e.stopWorker(1);
+    assert.equal(e.state().nodes[1]!.status, "gone");
+    assert.ok(e.events.some((x) => x.kind === "worker_gone" && x.node === 1));
+    assert.equal(key(await e.run()), key(await db.compile(sql, o).start().run()));
+  });
+
   test("lost outputs are made again from their lineage", async () => {
     const [sql, o] = queries[0]!;
     const e = db.compile(sql, o).start();

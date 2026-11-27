@@ -18,9 +18,9 @@ import { partitionOf } from "../../../../core/hash.ts";
 import { tupleKey, type Row, type Value } from "../../../../core/types.ts";
 import { Batch, checkColumns } from "../batch.ts";
 import type { Charged, ExecContext } from "../context.ts";
-import { COST } from "../../../../cluster/cost.ts";
+import { COST } from "../../../../core/cost.ts";
 import type { BufferSplit, OutputBuffer } from "../buffer.ts";
-import { ENTRY_OVERHEAD, rowsBytes } from "../../../../cluster/rows.ts";
+import { ENTRY_OVERHEAD, rowsBytes } from "../../../../core/rows.ts";
 import { Sink, Source, type OperatorInstance, type SourceInput, type SourceInstance } from "../operator.ts";
 
 interface Group {

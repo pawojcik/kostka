@@ -1,8 +1,10 @@
 // Sizes of values and rows, in bytes: what memory holds and what IO moves. Every
 // engine prices rows with these, so that their memory and IO are comparable. Sizes
-// are estimates (a row is sampled), not what JavaScript actually allocates.
+// are estimates (a row is sampled), not what JavaScript actually allocates. Like the
+// cost model (cost.ts), they are plain functions of values, so engines' operators and
+// the cluster's memory and blocks both use them.
 
-import type { Row, Value } from "../core/types.ts";
+import type { Row, Value } from "./types.ts";
 
 /** Bytes per row (a row index / null bitmap share) and per hash entry or group. */
 export const ROW_OVERHEAD = 8;

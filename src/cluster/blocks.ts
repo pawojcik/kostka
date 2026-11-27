@@ -9,7 +9,7 @@
 
 import { internal } from "../core/errors.ts";
 import type { Row } from "../core/types.ts";
-import { rowsBytes } from "./rows.ts";
+import { rowsBytes } from "../core/rows.ts";
 
 export interface Block {
   /** Unique on its node. */

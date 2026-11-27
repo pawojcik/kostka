@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { BlockLostError, BlockStore, DataPlane } from "../../src/cluster/blocks.ts";
-import { rowsBytes } from "../../src/cluster/rows.ts";
+import { rowsBytes } from "../../src/core/rows.ts";
 
 describe("blocks", () => {
   test("a store keeps rows as numbered blocks, with their size", () => {

@@ -11,7 +11,7 @@ import type { DataFile } from "../../../../catalog/meta.ts";
 import type { Scan, ScanInfo } from "../../../../sql/plan.ts";
 import { Batch } from "../batch.ts";
 import type { Charged, ExecContext } from "../context.ts";
-import { COST } from "../../../../cluster/cost.ts";
+import { COST } from "../../../../core/cost.ts";
 import type { FileSplit, Split } from "../buffer.ts";
 import { Source, type SourceInput, type SourceInstance } from "../operator.ts";
 import type { RuntimeFilter } from "./runtime-filter.ts";
@@ -54,7 +54,7 @@ export class ScanSource extends Source {
     return {
       prepare: async (split: Split) => {
         if (split.kind !== "file" || !this.scan.columns.length || loaded) return;
-        const bytes = await this.reader.readFile(this.scan, split.file);
+        const bytes = await this.reader.readFile(this.scan.meta, split.file);
         const t0 = performance.now();
         const rows = await decodeParquet(bytes, this.scan.columns);
         loaded = { rows, decodeNs: Math.round((performance.now() - t0) * 1e6) };

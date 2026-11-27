@@ -40,7 +40,8 @@ engine there is (`engines/index.ts`), and the UI imports everything.
 ```
 src/
   core/         types and values, errors, bound expressions, functions, hashing,
-                the categories of time
+                the categories of time, the CPU cost model and row sizes (plain
+                models, used by engines' operators and the cluster alike)
     functions/  the function registry, scalar functions and operators, casts, aggregates
   catalog/      table metadata in SQLite: tables, snapshots, files, per-file statistics
   storage/      file stores (memory, Node, OPFS), Parquet data files, statistics
@@ -49,8 +50,7 @@ src/
     optimizer/  rules, cardinality estimates
   cluster/      the simulated cluster every engine runs on (infrastructure): settings
                 and IO profiles, nodes (cores, clocks, the IO channel), memory and
-                disk, blocks and the data plane, the event loop and its history,
-                the cost model, row sizes
+                disk, blocks and the data plane, the event loop and its history
   execution/    the seam: what an engine is, an Execution, the state every engine
                 shows (ExecState), and the registry of engines
   api/          Database (tables + loaders + queries) and CompiledQuery
@@ -489,7 +489,7 @@ A cluster setting, `cpu`, chooses where an operator's CPU time comes from:
   Browsers coarsen `performance.now()` (to 100 µs without cross-origin isolation,
   which GitHub Pages cannot enable), so very short calls are noisy; their sum is
   still about right.
-- **model** (`cluster/cost.ts`): computed from rows and rough per-row nanoseconds for a
+- **model** (`core/cost.ts`): computed from rows and rough per-row nanoseconds for a
   columnar engine on one core: scan decode, filter, project, hash insert (≈ 1.2
   probes), hash probe, sort (n log n), merge, output row (≈ 0.3), and so on. Every
   run of a query takes the same simulated time and has the same schedule.
@@ -637,8 +637,9 @@ each node and connects the coordinator and the workers to it.
   events not yet delivered are lost with it, and kostka's coordinator gets
   `WorkerGone`.
 - **Table storage**: data files are read from shared storage (storage time).
-- **Settings** (`config.ts`): nodes (1–8; `workers` is another name for it), cores
-  per node (default 1; kostka uses core 0 only), memory per node (default 2 MB),
+- **Settings** (`config.ts`): nodes (1 to 64, the workbench offers 1, 2, 4 and 8;
+  `workers` is another name for it), cores per node (1 to 64, default 1; kostka uses
+  core 0 only), memory per node (default 2 MB),
   disk per node (default 16 MB), an IO profile (cloud, fast, slow, none: bandwidth
   and latency of shared storage, local disk and network), batch rows (the size of a
   batch, and of the pieces a sink writes; default 4,096), split rows, CPU time

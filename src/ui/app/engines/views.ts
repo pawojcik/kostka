@@ -37,6 +37,10 @@ export interface EngineViews {
   unit(u: Json, q: Query): UnitLook;
   /** The trace's rows of units, in order. */
   groups(state: Json): UnitGroup[];
+  /** What is running now, after the Finish button ("P0, P1"). */
+  running(state: Json): string;
+  /** What the Steps view says about the engine's steps and messages. */
+  readonly stepsNote: VNode;
   /** Tabs of the engine's own objects, shown after Plan. */
   readonly tabs: readonly { readonly key: SubTab; readonly label: string; view(p: { q: Query; state: Json }): VNode }[];
 }

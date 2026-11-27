@@ -64,7 +64,7 @@ export function EventsView({ q, state, go }: { q: Query; state: Json; go: (at: n
   const start = Math.max(0, shown.findIndex((e) => e.seq >= at) - LIMIT / 2);
   return (
     <div class="stack">
-      <p class="note">The coordinator and the workers talk only by messages: the coordinator sends <b>commands</b> (AddSplits, ReleaseBuffer), the workers answer with <b>events</b> (SplitDone, SplitFailed); the infrastructure says when a worker is gone (WorkerGone). Every step groups the messages of one decision of the coordinator, or of one split a worker ran; a message a gone worker sent that never arrived is shown struck through. The views show the query right after the step chosen here or with the history slider.</p>
+      {v.stepsNote}
       <div class="row evfilter">
         {kinds.filter((k) => counts.has(k.kind)).map(({ kind: k }) => (
           <label class={q.hidden.has(k) ? "off" : ""}><input type="checkbox" checked={!q.hidden.has(k)} onChange={() => toggle(k)} /><KindChip engine={state.engine} kind={k} /> <span class="faint">{n(counts.get(k))}</span></label>

@@ -252,7 +252,7 @@ function Controls({ q }: { q: Query }) {
         <button class="btn" data-tour="step" disabled={!canStep} title="Goes to the next step, running the simulation if it has not happened yet" onClick={() => act(q, "step")}>Step</button>
         <button class="btn" data-tour="next" disabled={!canStep} title="Goes to the next step where a worker processed a split" onClick={() => act(q, "next")}>Next split</button>
         <button class="btn" data-tour="wave" disabled={!canRun} title="Runs until each worker that can ran one split" onClick={() => act(q, "wave")}>Wave</button>
-        <button class="btn" data-tour="finish" disabled={!canRun} title="Runs until the pipelines running now are done" onClick={() => act(q, "finish")}>Finish {st ? running(st) : ""}</button>
+        <button class="btn" data-tour="finish" disabled={!canRun} title="Runs until the pipelines running now are done" onClick={() => act(q, "finish")}>Finish {st ? viewsOf(st.engine).running(st) : ""}</button>
         <button class="btn" data-tour="run" disabled={!canRun} onClick={() => act(q, "run")}>Run to the end</button>
         <span class="grow" />
         {q.pending && <Spinner>{q.pending}…</Spinner>}
@@ -275,12 +275,6 @@ function Controls({ q }: { q: Query }) {
     </div>
   );
 }
-
-function running(st: Json): string {
-  const r = st.pipelines.filter((p: Json) => p.status === "running");
-  return r.map((p: Json) => `P${p.index}`).join(", ");
-}
-
 
 export function QueryTab({ q }: { q: Query }) {
   const state = shownState(q);
