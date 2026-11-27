@@ -6,3 +6,9 @@ data/
 .claude/settings.local.json
 .DS_Store
 docs/*.map
+# built by npm run build (and by CI, which deploys docs/ to GitHub Pages)
+docs/app.js
+docs/worker.js
+docs/sqlite3.wasm
+docs/style.css
+docs/index.html

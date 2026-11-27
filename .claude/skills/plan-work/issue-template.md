@@ -22,7 +22,7 @@ An order of work, done as one change and tested as a whole:
 Copied from the ADR. Each one falsifiable, with how it is checked.
 
 - [ ] One sentence, under stated conditions. Checked by: …
-- [ ] The type check and `npm test` pass; `docs/` is rebuilt.
+- [ ] The type check and `npm test` pass; `npm run build` succeeds.
 
 ## Out of scope
 

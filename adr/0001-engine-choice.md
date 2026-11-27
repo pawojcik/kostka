@@ -293,7 +293,7 @@ Execution API section documents `Engine`, `ExecState` and the registry.
 10. The workbench looks and works as before with kostka: every tutorial runs to the end,
    and the Program, Query state, Workers, Steps and Trace tabs show the same as on
    `main` for SSB Q2.1. Checked by: a run in the browser.
-11. The type check and `npm test` pass; `docs/` is rebuilt; `README.md` is updated.
+11. The type check and `npm test` pass; `npm run build` succeeds; `README.md` is updated.
 
 ## Alternatives considered
 

@@ -50,10 +50,10 @@ ones that concern it.
 
 - `npm test`: all tests (`node --test`, TypeScript run directly by Node 24+).
 - `npx tsc --noEmit -p . --noUnusedLocals --noUnusedParameters`: the type check to pass.
-- `npm run build`: builds the workbench into `docs/` (minified). Run it before every
-  commit that touches `src/`, and commit `docs/` with it.
-- `npm run dev`: rebuilds on change and serves http://localhost:8765 (unminified;
-  never commit that build).
+- `npm run build`: builds the workbench into `docs/` (minified). The built files are
+  not committed: on every push to `main`, `.github/workflows/deploy.yml` tests, builds
+  and deploys `docs/` to GitHub Pages.
+- `npm run dev`: rebuilds on change and serves http://localhost:8765 (unminified).
 
 ## Code and tests
 

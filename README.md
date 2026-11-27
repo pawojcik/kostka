@@ -24,7 +24,10 @@ TypeScript run directly by Node (type stripping, Node 24 or later). Dependencies
 `hyparquet` / `hyparquet-writer` (Parquet), `@sqlite.org/sqlite-wasm` (the catalog in
 the browser; Node uses the built-in `node:sqlite`), Preact and CodeMirror 6 (the
 workbench). `npm test` runs the tests, `npm run typecheck` the type checker,
-`npm run build` builds the workbench into `docs/`.
+`npm run build` builds the workbench into `docs/`. On every push to `main`, GitHub
+Actions (`.github/workflows/deploy.yml`) runs the type check and the tests, and if they
+pass, builds the workbench and deploys `docs/` to GitHub Pages. The built files are not
+committed.
 
 ## Layout
 
@@ -55,8 +58,9 @@ src/
                 editor, the Preact app
 test/           mirrors src/; results are checked against SQLite (node:sqlite)
 tools/build.mjs builds the workbench (esbuild) into docs/
-docs/           GitHub Pages: the built workbench, plus engine-comparison.html and
-                spark-job-lab.html
+docs/           GitHub Pages: the built workbench (not committed), plus the taxi data,
+                engine-comparison.html and spark-job-lab.html
+.github/        the workflow that tests, builds and deploys to GitHub Pages
 ```
 
 A query goes through:
@@ -728,7 +732,7 @@ not available (another tab holds it, a private window) everything is in memory.
   show the query as it was right after the step chosen.
 
 `npm run dev` rebuilds on every change and serves `docs/` on http://127.0.0.1:8765
-(unminified, with source maps: run `npm run build` before committing). `npm run build` bundles `src/ui/main.tsx` → `docs/app.js` and `src/ui/worker.ts` →
+(unminified, with source maps). `npm run build` bundles `src/ui/main.tsx` → `docs/app.js` and `src/ui/worker.ts` →
 `docs/worker.js` (esbuild, class names kept: plan nodes are named by their class),
 and copies `sqlite3.wasm`, the stylesheet and `index.html`.
 

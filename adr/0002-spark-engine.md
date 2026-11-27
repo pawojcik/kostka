@@ -374,7 +374,7 @@ Tasks are units on cores (a slot's core), timed by `cluster/node.ts`:
       views.
 
     Checked by: a run in the browser.
-12. The type check and `npm test` pass; `docs/` is rebuilt; `README.md` is updated.
+12. The type check and `npm test` pass; `npm run build` succeeds; `README.md` is updated.
 
 ## Alternatives considered
 
