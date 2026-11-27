@@ -404,3 +404,17 @@ None.
   plain numbers and functions of values, with no clock, IO or state. The operators
   and the cluster's memory and blocks both use them, and nothing in an engine's
   domain imports `cluster/`.
+
+### 2026-11-27: exit criterion 2 names every change the design makes to the tests
+
+- **Assumed:** existing tests change only in import paths, `refs` and `worker` to
+  `node` (criterion 2).
+- **True:** the design itself changes three more things the tests use:
+  `CompiledQuery.start()` returns the Execution (the sequence diagram under Design),
+  `members` becomes `nodes` and `stopWorker` becomes `stopNode` on the shared
+  `Execution` (Compatibility). The tests had to change with them (review of #1,
+  finding 5).
+- **So:** criterion 2, as agreed with the ADR's owner, now reads: "All existing tests
+  pass, changed only in import paths, `refs`, `worker`/`workers`/`members` to
+  `node`/`nodes`, `stopWorker` to `stopNode`, and `start()` returning the Execution."
+  The issue's criterion says the same.
