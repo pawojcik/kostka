@@ -351,7 +351,8 @@ settings      key -> JSON value (file_rows)
   files in `docs/taxi/` (2.2 MB) and fetched when loaded: 100,000 yellow taxi trips of
   January 2024 sampled at random from the TLC trip records (trips), in pickup order,
   and the 265 taxi zones (zones). `tools/taxi-sample.ts` cuts the sample from the
-  published files. 8 example queries with SQLite references.
+  published files. 9 example queries with SQLite references; one (tips above the average
+  for the payment type) joins on a skewed key, to show skew with a shuffle join.
 - **SSB** (`ssb/`): the Star Schema Benchmark's lineorder fact table and its four
   dimensions (date, customer, supplier, part) with seeded data following the SSB
   domains: yyyymmdd date keys, 25 nations in 5 regions with 10 cities each, 5
@@ -896,15 +897,19 @@ not available (another tab holds it, a private window) everything is in memory.
 - **SQL editor** (`editor.ts`): CodeMirror 6 with completion of tables, columns
   (with their types, through aliases) and functions (with signatures) from the
   catalog, and squiggles under parse and analysis errors as you type.
-- **Tutorials** (`app/tutorial.tsx`): a Tutorial button opens five guided scenarios:
+- **Tutorials** (`app/tutorial.tsx`): a Tutorial button opens six guided scenarios:
   your first query (NYC taxi), how the work is split (SSB Q2.1: broadcast and shuffle
   joins, splits, partitions), a worker fails (NYC taxi on 3 workers: lost outputs,
   recovery, then every worker stopped), what the optimizer saves you (SSB Q4.1 with
-  rules turned off: refused cross joins, then the cost of reading every column), and
+  rules turned off: refused cross joins, then the cost of reading every column),
   Spark-style: stages, shuffles and slots (the sample on the Spark-style engine:
   "revenue per city" shuffles and "orders from one city" broadcasts, a higher threshold
   broadcasts the first too, 2 cores run tasks side by side and wait for IO, and a node
-  stopped in the last stage gives FetchFailed and a resubmitted stage). kostka's
+  stopped in the last stage gives FetchFailed and a resubmitted stage), and skew (the
+  taxi trips joined on their skewed payment type, on 4 nodes with the cost model:
+  broadcast spreads the work, a shuffle join puts 94% of the trips in one partition,
+  one kostka worker or one Spark task does most of the work, and why more partitions
+  don't help; it starts on kostka and switches to the Spark-style engine). kostka's
   tutorials run on kostka: starting one sets its query's engine to kostka. Each
   loads its data if needed and opens its query; a callout shows one step at a time and
   a ring marks the element it is about (`data-tour` attributes; a control inside the

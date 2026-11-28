@@ -108,4 +108,15 @@ from trips t join zones z on t.pickup_zone = z.zone_id
 where t.pickup_time >= 1705708800000000 and t.pickup_time < 1705881600000000 and z.zone like 'Midtown%'
 group by 1, 2 order by z.zone, hour`,
   },
+  {
+    id: "taxi9",
+    title: "Taxi · tips above the average for the payment type",
+    about: "Each trip is joined with its payment type's average tip. Payment is skewed: 79% of trips are paid by card. The averages are 5 rows, so by default they are broadcast and the work is even. Make the join a shuffle (kostka: join distribution shuffle; Spark-style: broadcast threshold off) and every card trip goes to one partition: one worker, or one task, does most of the work while the others wait.",
+    sql: `with p as (select payment, avg(tip) avg_tip from trips group by payment)
+select t.payment, count(*) trips, round(avg(t.tip - p.avg_tip), 2) above_avg
+from trips t join p on t.payment = p.payment
+where t.tip > p.avg_tip
+group by t.payment
+order by trips desc`,
+  },
 ];

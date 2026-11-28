@@ -79,6 +79,23 @@ function openExample(t: Run, example: string, name: string): void {
   t.q = q;
 }
 
+/** The busiest node's busy time, and the average of the others. */
+function busiest(t: Run): { node: number; busy: number; others: number } {
+  const ns: Json[] = latest(t)?.nodes ?? [];
+  const top = ns.reduce((a: Json, b: Json) => (b.busy_ms > (a?.busy_ms ?? -1) ? b : a), null);
+  const rest = ns.filter((x) => x !== top);
+  return { node: top?.node ?? 0, busy: top?.busy_ms ?? 0, others: rest.length ? rest.reduce((a, x) => a + x.busy_ms, 0) / rest.length : 0 };
+}
+/** The longest task that ran, and the average time of the other tasks of its stage. */
+function longestTask(t: Run): { stage: number; partition: number; time: number; others: number; spill: number } | null {
+  const ran: Json[] = (latest(t)?.tasks ?? []).filter((x: Json) => x.start_ms !== null && x.end_ms !== null);
+  if (!ran.length) return null;
+  const time = (x: Json) => x.end_ms - x.start_ms;
+  const top = ran.reduce((a, b) => (time(b) > time(a) ? b : a));
+  const rest = ran.filter((x) => x.stage === top.stage && x !== top);
+  return { stage: top.stage, partition: top.partition, time: time(top), others: rest.length ? rest.reduce((a, x) => a + time(x), 0) / rest.length : 0, spill: top.spill_bytes ?? 0 };
+}
+
 const stagesOf = (t: Run): Json[] => latest(t)?.stages ?? [];
 const sparkOp = (t: Run, name: string) => (latest(t)?.ops ?? []).some((o: Json) => o.name === name);
 const finalStage = (t: Run): Json | undefined => stagesOf(t).at(-1);
@@ -285,6 +302,41 @@ const SCENARIOS: Scenario[] = [
       openTab("events", "Steps", () => <>What happened?</>),
       see("FetchFailed", "events", (t) => <>{t.q?.events.some((e: Json) => e.kind === "FetchFailed") ? <>Find <B>FetchFailed</B> in the list: a task of the last stage could not read a shuffle file that was on node 1. That stage attempt failed; the driver resubmitted the stage before it (<B>StageResubmitted</B>, attempt 1) for the lost partitions only, and then the last stage again.</> : <>The last stage's tasks had read their shuffle files before node 1 was gone, so no fetch failed this time: find <B>StageResubmitted</B> instead, or start over and stop the node right after the last stage is submitted.</>} The result is the same; it came later.</>),
       see("That's Spark's model", undefined, () => <>Stages and barriers instead of pipelines, shuffle files on disk instead of output buffers in memory, a broadcast threshold in bytes instead of kostka's rule, and stage resubmission instead of kostka's recovery from lineage. Choose kostka in Options and recompile to see kostka's views of the same query.</>),
+    ],
+  },
+  {
+    id: "skew",
+    title: "Skew: one partition with most of the rows",
+    summary: "A shuffle join on a skewed key, on both engines: one kostka worker, or one Spark task, does most of the work while the rest wait. Why more partitions don't help, and why broadcasting does.",
+    dataset: "taxi", example: "taxi9", name: "Tips above the average", workers: 4,
+    steps: [
+      see("A skewed key", "query", () => <>This query joins every taxi trip with the average tip of its payment type. The key is <B>skewed</B>: 79% of the 100,000 trips are paid by card, 15% in cash, and the other three types share the rest. It runs on 4 workers.</>),
+      openOptions,
+      act("Repeatable times", "sim", "Set CPU time to Cost model.", (t) => t.q?.options.cluster.cpu === "model",
+        () => <>You'll compare run times, so let the cost model count CPU time: every run of a query then takes the same simulated time.</>),
+      compile("Compile it", () => <>First with the default settings.</>),
+      runToEnd(),
+      see("Even work", "timeline", (t) => { const b = busiest(t); return <>The averages are 5 rows, so the join is a <B>broadcast</B>: every worker gets them all and joins the trips of the files it reads. The work spreads evenly: the busiest worker, W{b.node}, was busy {ms(b.busy)}, the others {ms(b.others)} on average. The query took {ms(latest(t)?.elapsed_ms ?? 0)}.</>; }),
+      { ...act("Shuffle the join", "joins", "Set join distribution to shuffle.", (t) => t.q?.options.planner.joinStrategy === "shuffle",
+        () => <>Now make it a shuffle join, as if the averages were too big to copy to every worker. Both sides are partitioned by payment, into 8 partitions (2 per worker).</>), enter: (t) => { t.memo.kostkaBroadcast = latest(t)?.elapsed_ms ?? 0; } },
+      compile("Compile with shuffle"),
+      runToEnd(),
+      see("One busy worker", "timeline", (t) => { const b = busiest(t); return <>Now W{b.node} was busy {ms(b.busy)}, and the others only {ms(b.others)} on average: they sat idle, waiting for it. The query took {ms(latest(t)?.elapsed_ms ?? 0)}, against {ms(t.memo.kostkaBroadcast ?? 0)} with broadcast.</>; }),
+      openTab("state", "Query state", () => <>Why one worker?</>),
+      see("A hot partition", "state-buffers", () => <>Look at the probe side's shuffle buffer. A row goes to the partition its key hashes to, so every card trip goes to the same partition, and here cash hashes to that one too: it holds about 94% of the trips, and four of the 8 partitions hold none. kostka cuts the hot partition into several splits, but a partition has one <B>owner</B>: its hash table is built there, so all its splits run on that worker, one after another.</>),
+      see("More partitions?", "state-buffers", () => <>More shuffle partitions would not help: all card trips have the same key, so they always land in one partition, whatever the count. Hashing spreads keys, not the rows of one key. Broadcasting the small side avoids the shuffle, and so the skew.</>),
+      act("Switch to Spark-style", "engine-spark", "Choose the Spark-style engine.", (t) => t.q?.options.engine === "spark",
+        () => <>Now the same query on the Spark-style engine.</>),
+      act("Turn broadcasts off", "broadcast-threshold", "Set the broadcast threshold to off.", (t) => t.q?.options.spark.broadcastThreshold === -1,
+        () => <>At the default 32 KB threshold, the 5 averages would be broadcast. Turn broadcasts off to get a SortMergeJoin: both sides shuffled by payment, into 8 partitions (2 per core).</>),
+      compile("Compile on Spark"),
+      runToEnd(),
+      see("One long task", "timeline", (t) => { const x = longestTask(t); return x ? <>Task {x.partition} of stage {x.stage} took {ms(x.time)}; the other tasks of that stage took {ms(x.others)} on average. Spark runs one task per partition, so the hot partition is one task, a <B>straggler</B>: no other core can share its rows. The query took {ms(latest(t)?.elapsed_ms ?? 0)}.</> : <>Run it to the end first.</>; }),
+      openTab("spark-jobs", "Jobs · Stages · Tasks", () => <>Spark's pages show the same thing per stage.</>),
+      act("Open the slow stage", "spark-stages", (t) => `Click stage ${longestTask(t)?.stage ?? ""}.`, (t) => t.q?.sel?.kind === "stage" && t.q.sel.id === longestTask(t)?.stage,
+        () => <>It is the stage that reads both shuffles and joins them.</>),
+      see("The straggler", "spark-tasks", (t) => <>One task's time is far above the others'. A stage is a <B>barrier</B>: the next stage cannot start until this task is done, so every other core waits for it. That one task also sorts the whole hot partition for the SortMergeJoin, which kostka's hash join does not need to do{longestTask(t)?.spill ? <>; the sort does not fit in its share of memory, so it <B>spills</B> to disk (the spill column), and that costs more time</> : null}.</>),
+      see("What helps", undefined, () => <>Skew comes from many rows with one key, so it is about the data, not the engine. What helps: broadcasting the small side, as both engines do here by default; splitting a hot partition across several tasks (Spark's adaptive execution does this for joins; it is not in this engine); or adding a random <B>salt</B> to the key so one key's rows spread over several partitions. Try 8 workers, or 16 shuffle partitions: the hot partition stays as big.</>),
     ],
   },
 ];
