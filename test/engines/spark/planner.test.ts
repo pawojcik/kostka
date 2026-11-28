@@ -2,6 +2,8 @@
 // - criterion 2: on the sample with the default settings, "revenue per city" plans a
 //   SortMergeJoin with a hash Exchange on each side and "orders from one city" a
 //   BroadcastHashJoin; SSB Q4.1 at scale 0.1 has both;
+// - the operators each plan node becomes: a Sort, a TopN, a Limit and a join without
+//   keys, and no Exchange where the input is in one partition already;
 // - criterion 3: one stage per Exchange plus one result stage per job, one job per
 //   BroadcastExchange plus one, and each stage's task count (SSB Q2.1, TPC-DS q65).
 import assert from "node:assert/strict";
@@ -71,6 +73,49 @@ describe("the Spark-style planner: broadcast or shuffle", () => {
     assert.throws(() => sparkSettings({ joinStrategy: "shuffle" }), /no setting "joinStrategy"/);
     assert.throws(() => sparkSettings({ broadcastThreshold: -2 }), /broadcastThreshold must be/);
     assert.throws(() => sparkSettings({ maxTaskFailures: 0 }), /maxTaskFailures must be/);
+  });
+});
+
+describe("the Spark-style planner: operators", () => {
+  let db: Database;
+  before(async () => {
+    db = openDatabase();
+    await db.loadSample();
+  });
+
+  /** The plan's operators by name, a line each, indented by depth; partial operators marked. */
+  const shape = (text: string) => {
+    const lines: string[] = [];
+    const visit = (op: SparkOp, depth: number) => {
+      const arg = op instanceof ShuffleExchange ? ` ${op.target.kind}` : /partial/.test(op.args()) ? " partial" : "";
+      lines.push(`${"  ".repeat(depth)}${op.name()}${arg}`);
+      for (const c of op.children()) visit(c, depth + 1);
+    };
+    visit(spark(db, text).plan.root, 0);
+    return lines;
+  };
+
+  test("Sort: an Exchange to one partition, then a Sort", () => {
+    assert.deepEqual(shape("select id from orders order by amount").slice(0, 3), ["Project", "  Sort", "    Exchange single"]);
+  });
+
+  test("TopN: TakeOrderedAndProject in each task, then once more in one partition", () => {
+    assert.deepEqual(shape("select * from orders order by amount limit 3").slice(0, 3), ["TakeOrderedAndProject", "  Exchange single", "    TakeOrderedAndProject partial"]);
+  });
+
+  test("Limit: LocalLimit in each task, an Exchange to one partition, then GlobalLimit", () => {
+    assert.deepEqual(shape("select * from orders limit 3").slice(0, 3), ["GlobalLimit", "  Exchange single", "    LocalLimit"]);
+  });
+
+  test("a join without keys: a BroadcastNestedLoopJoin, its right side broadcast", () => {
+    assert.deepEqual(shape("select o.id, u.id from orders o join users u on o.amount > u.id"), ["Project", "  BroadcastNestedLoopJoin", "    FileScan", "    BroadcastExchange", "      FileScan"]);
+  });
+
+  test("no Exchange where the input is in one partition already", () => {
+    // Above a Sort, the rows are in one partition: the Limit is a GlobalLimit alone.
+    assert.deepEqual(shape("select * from (select * from orders order by amount) x limit 3").slice(0, 4), ["GlobalLimit", "  Project", "    Sort", "      Exchange single"]);
+    // A final aggregate without keys is one partition too.
+    assert.deepEqual(shape("select count(*) from orders limit 1"), ["GlobalLimit", "  Project", "    HashAggregate", "      Exchange single", "        HashAggregate partial", "          FileScan"]);
   });
 });
 

@@ -6,11 +6,13 @@
 // - criterion 6: a node stopped at 20 evenly spaced steps gives the same rows, with a
 //   resubmitted stage (and FetchFailed when a reading stage was running);
 // - criterion 7: a hash aggregate bigger than a task's memory fails after 4 attempts;
-// - criterion 8: a sort bigger than a task's memory spills and is still right.
+// - criterion 8: a sort bigger than a task's memory spills and is still right;
+// - a broadcast hash table bigger than a node's memory, and shuffle files bigger
+//   than its disk, fail the query with OutOfMemoryError and OutOfDiskError.
 import assert from "node:assert/strict";
 import { before, describe, test } from "node:test";
 import type { DatabaseSync } from "node:sqlite";
-import { OutOfMemoryError } from "../../../src/core/errors.ts";
+import { OutOfDiskError, OutOfMemoryError } from "../../../src/core/errors.ts";
 import type { Value } from "../../../src/core/types.ts";
 import type { Database } from "../../../src/api/database.ts";
 import type { QueryOptions } from "../../../src/api/query.ts";
@@ -203,6 +205,26 @@ describe("Spark-style: memory", () => {
     assert.deepEqual(bad.filter((t) => t.stage === first.stage && t.partition === first.partition).map((t) => t.attempt), [0, 1, 2, 3]);
   });
 
+  test("a broadcast hash table bigger than a node's memory fails the query, saying to lower broadcastThreshold", async () => {
+    const e = spark(db, "select count(*) from t a join t b on a.id = b.id", { settings: { broadcastThreshold: 1 << 30 }, cluster: { nodes: 1, cores: 1, memoryMB: 0.25, cpu: "model" } });
+    assert.ok((e.state().ops as unknown as { name: string }[]).some((o) => o.name === "BroadcastHashJoin"), "the join is broadcast");
+    await assert.rejects(e.run(), (err: Error) => {
+      assert.ok(err instanceof OutOfMemoryError, `${err.name}: ${err.message}`);
+      assert.match(err.message, /failed 4 times/);
+      assert.match(err.message, /lower broadcastThreshold/);
+      return true;
+    });
+  });
+
+  test("shuffle files bigger than a node's disk fail the query with OutOfDiskError, after maxTaskFailures attempts", async () => {
+    const e = spark(db, "select id, s, v from t order by v", { settings: { maxTaskFailures: 2 }, cluster: { nodes: 1, cores: 1, memoryMB: 64, diskMB: 0.05, cpu: "model" } });
+    await assert.rejects(e.run(), (err: Error) => {
+      assert.ok(err instanceof OutOfDiskError, `${err.name}: ${err.message}`);
+      assert.match(err.message, /failed 2 times; most recent failure: .*ran out of disk/);
+      return true;
+    });
+  });
+
   test("a sort bigger than a task's memory spills, and returns SQLite's rows", async () => {
     const sql = "select id, s, v from t order by v, id";
     const e = spark(db, sql, { cluster: { nodes: 2, cores: 2, memoryMB: 0.5, cpu: "model" } });
@@ -211,5 +233,47 @@ describe("Spark-style: memory", () => {
     assertRows(rows, want, "spilled sort");
     const tasks = e.state().tasks as unknown as { spill_bytes: number }[];
     assert.ok(tasks.some((t) => t.spill_bytes > 0), "a task spilled");
+  });
+});
+
+describe("Spark-style: Wave and Finish", () => {
+  let db: Database;
+  before(async () => {
+    db = openDatabase();
+    await db.loadSample();
+  });
+  const sql = () => SAMPLE.find((q) => q.id === "s1")?.sql ?? "";
+  const cluster = { nodes: 2, cores: 2, cpu: "model" } as const;
+
+  test("a wave runs at least one task, and at most one per core", async () => {
+    const e = spark(db, sql(), { cluster });
+    let waves = 0;
+    while (!e.done) {
+      const before = e.state().units as unknown as Unit[];
+      const ran = await e.wave();
+      const units = (e.state().units as unknown as Unit[]).slice(before.length);
+      assert.equal(units.length, ran, "wave() returns the tasks it ran");
+      if (e.done && ran === 0) break;
+      assert.ok(ran >= 1, `wave ${waves} ran a task`);
+      const cores = units.map((u) => `${u.node}:${u.core}`);
+      assert.equal(new Set(cores).size, cores.length, `wave ${waves}: one task per core at most (${cores.join(", ")})`);
+      assert.ok(ran <= cluster.nodes * cluster.cores);
+      waves++;
+    }
+    assert.ok(waves > 1, `${waves} waves`);
+  });
+
+  test("Finish runs until every stage that was running is done", async () => {
+    const e = spark(db, sql(), { cluster });
+    let checked = 0;
+    while (!e.done) {
+      await e.step();
+      const running = e.driver.stages.filter((s) => s.status.now === "running").map((s) => s.stage.id);
+      if (!running.length) continue;
+      await e.runConcurrent();
+      for (const id of running) assert.equal(e.driver.stages[id]?.status.now, "done", `stage ${id} is done after Finish`);
+      checked++;
+    }
+    assert.ok(checked >= 2, `Finish checked ${checked} times`);
   });
 });

@@ -189,6 +189,10 @@ function Controls({ q }: { q: Query }) {
   // The views of the engine compiled (or, before that, of the engine chosen).
   const v = viewsOf(st?.engine ?? o.engine);
   const unit = v.unitNoun;
+  // What "auto" will be with the options as they are now, before they are compiled.
+  // The engines decide it: keep this the same as Spark's sparkPartitions
+  // (engines/spark/engine.ts) and kostka's planner. The workbench does not import the
+  // engines, which run in its web worker.
   const auto = isSpark ? 2 * o.cluster.nodes * o.cluster.cores : 2 * o.cluster.nodes;
   const parts = (isSpark ? o.spark.shufflePartitions : o.planner.shufflePartitions) === "auto" ? auto : (isSpark ? o.spark.shufflePartitions : o.planner.shufflePartitions);
   const kb = (b: number) => (b < 0 ? "off" : b >= 1 << 30 ? `${b / (1 << 30)} GB` : b >= 1 << 20 ? `${b / (1 << 20)} MB` : `${b / 1024} KB`);

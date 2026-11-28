@@ -188,7 +188,7 @@ class Cursor {
       this.batch = b.rows;
       this.pos = 0;
     }
-    return this.batch[this.pos]!;
+    return this.batch[this.pos]!; // the loop above leaves pos inside the batch
   }
   advance(): void {
     this.pos++;

@@ -67,6 +67,11 @@ export class SparkPlan {
   constructor(root: SparkOp, shuffles: readonly ShuffleExchange[], broadcasts: readonly BroadcastExchange[], joins: readonly JoinChoice[], settings: PlanSettings) {
     this.root = root;
     this.ops = [...walk(root)];
+    // Stages, tasks and the workbench name operators by these: each must have them.
+    this.ops.forEach((op, i) => {
+      if (op.id !== i) throw internal(`${op.name()} is operator ${i} of the plan but has number ${op.id}`);
+      if (!op.planNode) throw internal(`${op.name()} (#${i}) implements no plan node`);
+    });
     this.shuffles = shuffles;
     this.broadcasts = broadcasts;
     this.joins = joins;
@@ -80,7 +85,7 @@ export class SparkPlan {
 export function planSpark(root: PlanNode, reader: TableReader, settings: PlanSettings): SparkPlan {
   const p = new Planner(reader, settings);
   const top = p.plan(root);
-  [...walk(top)].forEach((op, i) => (op.id = i));
+  [...walk(top)].forEach((op, i) => op.place({ id: i }));
   const joins = p.joins.map(([op, c]) => ({ ...c, op: op.id }));
   return new SparkPlan(top, p.shuffles, p.broadcasts, joins, settings);
 }
@@ -99,20 +104,18 @@ class Planner {
   }
 
   private tag<T extends SparkOp>(op: T, node: PlanNode): T {
-    op.planNode = node;
+    op.place({ node });
     return op;
   }
 
   private shuffle(child: SparkOp, keys: readonly Expr[] | null, node: PlanNode): ShuffleExchange {
-    const ex = this.tag(new ShuffleExchange(child, keys ? { kind: "hash", keys, n: this.settings.shufflePartitions } : { kind: "single" }), node);
-    ex.shuffle = this.shuffles.length;
+    const ex = this.tag(new ShuffleExchange(child, keys ? { kind: "hash", keys, n: this.settings.shufflePartitions } : { kind: "single" }, this.shuffles.length), node);
     this.shuffles.push(ex);
     return ex;
   }
 
   private broadcast(child: SparkOp, node: PlanNode): BroadcastExchange {
-    const ex = this.tag(new BroadcastExchange(child), node);
-    ex.broadcast = this.broadcasts.length;
+    const ex = this.tag(new BroadcastExchange(child, this.broadcasts.length), node);
     this.broadcasts.push(ex);
     return ex;
   }
@@ -154,6 +157,7 @@ class Planner {
     const nKeys = node.keys.length;
     const layout = new AggLayout(calls);
     // The partial rows carry each aggregate's state, not its result: e.g. avg's (count, sum).
+    // The layout has an aggregate for each of the schema's fields after the keys.
     const stateFields = node.schema.slice(nKeys).flatMap((f, i) =>
       layout.impls[i]!.state.map((t, j) => new Field(null, `${f.name}[${j}]`, -(f.id * 16 + j), t)));
     const partial = this.tag(new HashAggregateExec(this.plan(node.child), "partial", node.keys, calls, [...node.schema.slice(0, nKeys), ...stateFields]), node);

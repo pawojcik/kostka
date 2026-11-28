@@ -1,7 +1,10 @@
 // The Spark plan: a tree of physical operators, as Spark's SparkPlan is. Each operator
-// is an immutable spec: its children, its output columns, how its output is
-// partitioned, and `execute(ctx, partition)`, which computes one partition of its
-// output as a stream of batches, pulling from its children (Spark's iterator model).
+// is a spec that does not change once planned: its children, its output columns, how
+// its output is partitioned, and `execute(ctx, partition)`, which computes one
+// partition of its output as a stream of batches, pulling from its children (Spark's
+// iterator model). Two things are known only once the whole tree is built: its number
+// in the plan and the plan node it implements. The planner sets each once (`place`),
+// and a SparkPlan checks that every operator has them.
 //
 // Exchanges are where data moves between tasks:
 // - ShuffleExchange: its map side (a task of the stage below it) writes one shuffle
@@ -15,6 +18,7 @@
 // and `args`, and emit it from the planner.
 
 import { Batch } from "../../../core/batch.ts";
+import { internal } from "../../../core/errors.ts";
 import { ColumnRef, type Expr, type Field } from "../../../core/expr.ts";
 import type { Row } from "../../../core/types.ts";
 import type { PlanNode } from "../../../sql/plan.ts";
@@ -38,7 +42,10 @@ const sameColumn = (a: Expr, b: Expr) => a instanceof ColumnRef && b instanceof 
 
 /** The partitioning is by exactly these key columns, in this order, into `n`. */
 export function hashedBy(p: Partitioning, keys: readonly Expr[], n: number): boolean {
-  return p.kind === "hash" && p.n === n && p.keys.length === keys.length && p.keys.every((k, i) => sameColumn(k, keys[i]!));
+  return p.kind === "hash" && p.n === n && p.keys.length === keys.length && p.keys.every((k, i) => {
+    const other = keys[i];
+    return other !== undefined && sameColumn(k, other);
+  });
 }
 
 export function describePartitioning(p: Partitioning): string {
@@ -59,13 +66,29 @@ export interface BatchIter {
 }
 
 export abstract class SparkOp implements Charged {
-  /** Its number in the plan (preorder from 0), set by the planner. */
-  id = -1;
-  /** The optimized plan node it implements, set by the planner. */
-  planNode: PlanNode | null = null;
+  private number = -1;
+  private implemented: PlanNode | null = null;
   readonly output: readonly Field[];
   constructor(output: readonly Field[]) {
     this.output = output;
+  }
+  /** Its number in the plan (preorder from 0); -1 until the planner numbers it. */
+  get id(): number {
+    return this.number;
+  }
+  /** The optimized plan node it implements; null until the planner says which. */
+  get planNode(): PlanNode | null {
+    return this.implemented;
+  }
+  /** Sets its number, or the plan node it implements: once each, by the planner. */
+  place(p: { readonly id: number } | { readonly node: PlanNode }): void {
+    if ("id" in p) {
+      if (this.number >= 0) throw internal(`${this.name()} is numbered twice`);
+      this.number = p.id;
+    } else {
+      if (this.implemented) throw internal(`${this.name()} is given its plan node twice`);
+      this.implemented = p.node;
+    }
   }
   abstract children(): readonly SparkOp[];
   /** Spark's name for it ("HashAggregate"). */

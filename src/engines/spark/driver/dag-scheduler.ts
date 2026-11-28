@@ -26,7 +26,10 @@
 // - No executor left: the query fails.
 //
 // Each decision is a step (`ports.decide`) with the commands it sends; every change it
-// makes remembers its step, so the workbench can show the driver's state after any.
+// makes remembers its step, so the workbench can show the driver's state after any:
+// a job's, a stage's and a task's status are Histories, and a task's outcome (when it
+// ended, its error, its metrics) is set once, in the step its status leaves running.
+// Outside the driver all of it is read only.
 
 import { History } from "../../../core/history.ts";
 import { internal } from "../../../core/errors.ts";
@@ -81,8 +84,6 @@ export type TaskStatus = "running" | "success" | "failed" | "lost";
 export class JobState {
   readonly id: number;
   readonly status: History<JobStatus>;
-  start: number | null = null;
-  end: number | null = null;
   constructor(id: number) {
     this.id = id;
     this.status = new History<JobStatus>(0, "waiting");
@@ -100,8 +101,6 @@ export class StageState {
   readonly attempts: { attempt: number; seq: number; at: number; partitions: readonly number[] }[] = [];
   /** A result stage's partitions whose rows are in, with them. */
   readonly results = new Map<number, readonly Row[]>();
-  start: number | null = null;
-  end: number | null = null;
   constructor(stage: Stage) {
     this.stage = stage;
     this.status = new History<StageStatus>(0, "waiting");
@@ -110,17 +109,66 @@ export class StageState {
   }
 }
 
-export interface TaskRecord extends TaskId {
+/** How a task ended. */
+export interface TaskOutcome {
+  /** When it ended (its executor's clock, or the driver's when its executor was lost). */
+  readonly end: number;
+  readonly error: string | null;
+  /** It failed because it could not read a shuffle file. */
+  readonly fetchFailed: boolean;
+  readonly metrics: TaskMetrics | null;
+}
+
+/** A task the driver launched: where, when, its status after each step, and how it
+ * ended. A task ends once: `ended` throws if it is called again. */
+export class TaskRecord implements TaskId {
+  readonly tid: number;
+  readonly stage: number;
+  readonly stageAttempt: number;
+  readonly partition: number;
+  readonly attempt: number;
   readonly executor: number;
   readonly slot: number;
   /** The step it was launched in, and when. */
   readonly seq: number;
   readonly at: number;
   readonly status: History<TaskStatus>;
-  end: number | null;
-  error: string | null;
-  fetchFailed: boolean;
-  metrics: TaskMetrics | null;
+  private result: TaskOutcome | null = null;
+
+  constructor(l: Launch, seq: number, at: number) {
+    this.tid = l.tid;
+    this.stage = l.stage;
+    this.stageAttempt = l.stageAttempt;
+    this.partition = l.partition;
+    this.attempt = l.attempt;
+    this.executor = l.executor;
+    this.slot = l.slot;
+    this.seq = seq;
+    this.at = at;
+    this.status = new History<TaskStatus>(seq, "running");
+  }
+
+  /** How it ended; null while it runs. */
+  get outcome(): TaskOutcome | null {
+    return this.result;
+  }
+
+  /** It ended in step `seq`, with status `status`. */
+  ended(seq: number, status: Exclude<TaskStatus, "running">, outcome: TaskOutcome): void {
+    if (this.result) throw internal(`${taskName(this)} ended twice`);
+    this.status.set(seq, status);
+    this.result = outcome;
+  }
+}
+
+/** Why the query failed: a task failed too often ("task"), a stage was tried too
+ * often ("stage"), or no executor is left ("executors"). */
+export interface QueryFailure {
+  readonly unit: string;
+  readonly error: string;
+  /** The step it failed in. */
+  readonly seq: number;
+  readonly cause: "task" | "stage" | "executors";
 }
 
 export class DAGScheduler {
@@ -134,10 +182,8 @@ export class DAGScheduler {
   readonly executors: History<"up" | "gone">[];
   /** The rows of each broadcast, once its job is done: executors fetch them. */
   private readonly broadcastRows = new Map<number, readonly Row[]>();
-  /** Why the query failed: a task failed too often ("task"), a stage was tried too
-   * often ("stage"), or no executor is left ("executors"). */
-  failed: { unit: string; error: string; seq: number; cause: "task" | "stage" | "executors" } | null = null;
-  done = false;
+  private failure: QueryFailure | null = null;
+  private succeeded = false;
   private readonly ports: DriverPorts;
 
   constructor(plan: StagePlan, settings: DriverSettings, ports: DriverPorts) {
@@ -151,6 +197,16 @@ export class DAGScheduler {
     this.tracker = new MapOutputTracker(Array.from({ length: maps.length }, (_, i) => maps[i] ?? 0));
     this.scheduler = new TaskScheduler(settings.executors, settings.slots);
     this.executors = Array.from({ length: settings.executors }, () => new History<"up" | "gone">(0, "up"));
+  }
+
+  /** Why the query failed, once it has. */
+  get failed(): QueryFailure | null {
+    return this.failure;
+  }
+
+  /** The query's result is in. */
+  get done(): boolean {
+    return this.succeeded;
   }
 
   private get seq(): number {
@@ -205,7 +261,6 @@ export class DAGScheduler {
       const js = this.jobs[j.id]!; // jobs are made from plan.jobs
       if (js.status.now !== "waiting" || !j.needs.every((x) => this.jobs[x]?.status.now === "succeeded")) continue;
       js.status.set(this.seq, "running");
-      js.start = this.now;
       const what = j.broadcast ? `the broadcast for ${j.broadcast.label()} (#${j.broadcast.id})` : "the query's result";
       this.decide("JobStart", `job ${j.id} starts: ${what}; stage${j.stages.length === 1 ? "" : "s"} ${j.stages.join(", ")}`, { job: j.id });
       this.submitStage(this.plan.resultStage(j.id).id);
@@ -248,7 +303,6 @@ export class DAGScheduler {
     s.status.set(this.seq, "running");
     s.why.set(this.seq, `attempt ${attempt} running`);
     s.attempts.push({ attempt, seq: this.seq, at: this.now, partitions });
-    s.start ??= this.now;
     this.scheduler.submit(id, attempt, s.stage.job, partitions);
     const kind = w ? "ShuffleMapStage" : "ResultStage";
     const parts = `${partitions.length} task${partitions.length === 1 ? "" : "s"}`;
@@ -268,7 +322,7 @@ export class DAGScheduler {
 
   private launched(l: Launch): void {
     const st = this.stage(l.stage).stage;
-    const t: TaskRecord = { ...l, seq: this.seq, at: this.now, status: new History<TaskStatus>(this.seq, "running"), end: null, error: null, fetchFailed: false, metrics: null };
+    const t = new TaskRecord(l, this.seq, this.now);
     if (this.tasks.length !== l.tid) throw internal(`task ${l.tid} launched out of order`);
     this.tasks.push(t);
     const cmd: Command = { type: "LaunchTask", executor: l.executor, tid: l.tid, stage: l.stage, stageAttempt: l.stageAttempt, partition: l.partition, attempt: l.attempt, slot: l.slot, shuffles: this.tracker.inputs(st.reads), broadcasts: st.broadcasts };
@@ -297,9 +351,7 @@ export class DAGScheduler {
   private finished(e: Extract<ExecutorEvent, { type: "TaskFinished" }>): void {
     const t = this.task(e.tid);
     this.scheduler.finished(e.tid);
-    t.status.set(this.seq, "success");
-    t.end = e.metrics.end;
-    t.metrics = e.metrics;
+    t.ended(this.seq, "success", { end: e.metrics.end, error: null, fetchFailed: false, metrics: e.metrics });
     const s = this.stage(e.stage);
     const w = s.stage.writes;
     let what: string;
@@ -339,7 +391,6 @@ export class DAGScheduler {
     const id = s.stage.id;
     s.status.set(this.seq, "done");
     s.why.set(this.seq, "done");
-    s.end = this.now;
     this.scheduler.cancel(id);
     // Free what no stage reads any more.
     const up = this.scheduler.executorsUp();
@@ -369,7 +420,6 @@ export class DAGScheduler {
     const js = this.jobs[id]!; // ids come from the plan
     const job = this.plan.job(id);
     js.status.set(this.seq, "succeeded");
-    js.end = this.now;
     const rows = this.stage(this.plan.resultStage(id).id);
     if (job.broadcast) {
       const all = [...rows.results.entries()].sort((a, b) => a[0] - b[0]).flatMap(([, r]) => [...r]);
@@ -379,22 +429,18 @@ export class DAGScheduler {
       return;
     }
     this.decide("JobEnd", `job ${id} succeeded: the query's result is in`, { job: id });
-    this.done = true;
+    this.succeeded = true;
     this.decide("SQLExecutionEnd", `the query is done: ${this.rows().length.toLocaleString("en")} row(s)`);
   }
 
   private taskFailed(e: Extract<ExecutorEvent, { type: "TaskFailed" }>): void {
     const t = this.task(e.tid);
-    t.status.set(this.seq, "failed");
-    t.end = e.metrics?.end ?? this.now;
-    t.error = e.error;
-    t.metrics = e.metrics;
+    t.ended(this.seq, "failed", { end: e.metrics?.end ?? this.now, error: e.error, fetchFailed: !!e.fetchFailed, metrics: e.metrics });
     const s = this.stage(e.stage);
     const set = this.scheduler.setOf(e.stage, e.stageAttempt);
     const refs: Refs = { job: s.stage.job, stage: e.stage, tid: e.tid, executor: e.executor, partition: e.partition };
     const current = !!set && !set.zombie && s.attempt.now === e.stageAttempt && s.status.now === "running";
     if (e.fetchFailed) {
-      t.fetchFailed = true;
       const ff = e.fetchFailed;
       if (!current || !set) {
         this.scheduler.failed(e.tid, false);
@@ -436,9 +482,7 @@ export class DAGScheduler {
     const lostTasks = this.scheduler.executorLost(executor);
     for (const tid of lostTasks) {
       const t = this.task(tid);
-      t.status.set(this.seq, "lost");
-      t.end = this.now;
-      t.error = `executor ${executor} is gone`;
+      t.ended(this.seq, "lost", { end: this.now, error: `executor ${executor} is gone`, fetchFailed: false, metrics: null });
     }
     const lost = this.tracker.lostWith(executor, this.seq);
     const byStage = new Map<number, number>();
@@ -468,7 +512,7 @@ export class DAGScheduler {
   }
 
   private fail(cause: "task" | "stage" | "executors", unit: string, error: string): void {
-    this.failed = { unit, error, seq: this.seq, cause };
+    this.failure = { unit, error, seq: this.seq, cause };
     this.scheduler.stopAll();
     for (const j of this.jobs) if (j.status.now === "running") j.status.set(this.seq, "failed");
     this.decide("SQLExecutionFailed", `the query failed in ${unit}: ${error}`);

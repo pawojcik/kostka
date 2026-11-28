@@ -2,7 +2,7 @@
 // most free slots first, retries), the MapOutputTracker (locations, lost and removed
 // outputs) and the DAGScheduler fed events by hand: stages as barriers, FetchFailed
 // and the parent stage resubmitted for its missing partitions only, a task that fails
-// maxTaskFailures times, and every executor lost.
+// maxTaskFailures times, a stage tried maxStageAttempts times, and every executor lost.
 import assert from "node:assert/strict";
 import { before, describe, test } from "node:test";
 import type { Database } from "../../../src/api/database.ts";
@@ -84,10 +84,10 @@ describe("DAGScheduler", () => {
   });
 
   /** A driver for `sql` on `executors` × `slots`, its decisions recorded. */
-  function driver(sql: string, executors: number, slots: number, maxTaskFailures = 4): { d: DAGScheduler; plan: StagePlan; steps: Decision[]; launches: () => Extract<Command, { type: "LaunchTask" }>[] } {
+  function driver(sql: string, executors: number, slots: number, maxTaskFailures = 4, maxStageAttempts = 4): { d: DAGScheduler; plan: StagePlan; steps: Decision[]; launches: () => Extract<Command, { type: "LaunchTask" }>[] } {
     const plan = cutStages(planSpark(db.compile(sql).optimized, db.reader, { broadcastThreshold: -1, shufflePartitions: 2 }));
     const steps: Decision[] = [];
-    const d = new DAGScheduler(plan, { executors, slots, maxTaskFailures, maxStageAttempts: 4 }, { decide: (x) => steps.push(x), seq: () => steps.length });
+    const d = new DAGScheduler(plan, { executors, slots, maxTaskFailures, maxStageAttempts }, { decide: (x) => steps.push(x), seq: () => steps.length });
     d.start(0);
     const launches = () => steps.flatMap((s) => s.commands.filter((c): c is Extract<Command, { type: "LaunchTask" }> => c.type === "LaunchTask"));
     return { d, plan, steps, launches };
@@ -159,6 +159,34 @@ describe("DAGScheduler", () => {
     }
     assert.equal(steps.at(-1)!.kind, "SQLExecutionFailed");
     assert.match(d.failed!.error, /^Task 0 in stage 0\.0 failed 3 times; most recent failure: lost task 0\.2 in stage 0\.0 \(TID \d+\) on executor 0: OutOfMemoryError: too big/);
+  });
+
+  test("a stage tried maxStageAttempts times fails the query", () => {
+    const { d, steps, launches } = driver("select k, count(*) from t group by k", 3, 1, 4, 2);
+    const ended = new Set<number>();
+    const gone = new Set<number>();
+    const open = (stage: number) => launches().filter((l) => l.stage === stage && !ended.has(l.tid) && !gone.has(l.executor));
+    // Twice: the map tasks finish, an executor holding a map output is lost, and a
+    // reduce task's FetchFailed sends stage 0 back. Its second resubmission would be
+    // its third attempt, one more than maxStageAttempts allows.
+    for (let round = 0; round < 2; round++) {
+      for (let l = open(0)[0]; l; l = open(0)[0]) {
+        ended.add(l.tid);
+        finish(d, l);
+      }
+      const reduce = open(1).find((l) => l.stageAttempt === round);
+      assert.ok(reduce, `round ${round}: a reduce task of stage 1's attempt ${round} runs`);
+      const holder = launches().find((l) => l.stage === 0 && ended.has(l.tid) && l.executor !== reduce.executor && !gone.has(l.executor));
+      assert.ok(holder, `round ${round}: another executor holds a map output`);
+      gone.add(holder.executor);
+      d.on({ type: "ExecutorLost", executor: holder.executor }, 2);
+      ended.add(reduce.tid);
+      d.on({ type: "TaskFailed", executor: reduce.executor, tid: reduce.tid, stage: 1, stageAttempt: round, partition: reduce.partition, attempt: reduce.attempt, error: "FetchFailed: gone", name: "FetchFailed", fetchFailed: { shuffle: 0, map: holder.partition, node: holder.executor }, metrics: null }, 3);
+    }
+    assert.equal(steps.filter((s) => s.kind === "StageResubmitted" && s.refs.stage === 0).length, 1, "stage 0 ran as attempt 1 once");
+    assert.equal(steps.at(-1)!.kind, "SQLExecutionFailed");
+    assert.equal(d.failed?.cause, "stage");
+    assert.match(d.failed?.error ?? "", /^stage 0 was tried 2 times, and its shuffle input was lost each time/);
   });
 
   test("every executor lost fails the query", () => {

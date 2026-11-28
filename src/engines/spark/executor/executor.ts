@@ -45,9 +45,9 @@ export class Executor {
   /** The bytes a task may hold: memoryMB / cores. */
   readonly memoryShare: number;
   /** Tasks that failed here, for the workbench. */
-  failedTasks = 0;
-  /** Stopped by the infrastructure: it runs nothing more. */
-  gone = false;
+  private failedTasks = 0;
+  /** Stopped by the infrastructure (lost()): it runs nothing more. */
+  private gone = false;
   /** Events not sent yet, with when they happened. */
   readonly outbox: { at: number; event: ExecutorEvent }[] = [];
   private readonly ports: ExecutorPorts;
@@ -60,6 +60,11 @@ export class Executor {
     this.memoryShare = memoryShare;
     this.batchRows = batchRows;
     this.ports = ports;
+  }
+
+  /** Its node is gone: it handles no command and runs no task from now on. */
+  lost(): void {
+    this.gone = true;
   }
 
   handle(cmd: Command, now: number): void {
@@ -221,7 +226,7 @@ class TaskRun implements TaskContext {
       if (read.kind !== "ok") throw new FetchFailedError({ shuffle, map, node: m.node });
       this.clock.readDisk(bytes);
       if (m.node !== this.ex.id) this.clock.network(bytes, "in");
-      for (let i = from; i < to; i++) out.push(read.rows[i]!);
+      for (const row of read.rows.slice(from, to)) out.push(row);
       this.shuffleReadBytes += bytes;
     });
     this.shuffleReadRows += out.length;

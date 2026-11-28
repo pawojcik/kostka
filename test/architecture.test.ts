@@ -70,3 +70,28 @@ test("the Spark-style engine's domain does not import the cluster", () => {
   assert.deepEqual(crossings(["engines/spark/physical", "engines/spark/driver", "engines/spark/executor"], "cluster"), []);
   assert.ok(crossings(["engines/spark"], "cluster").length > 0, "its adapter does: the check sees it");
 });
+
+test("both engines get their kernels from core", () => {
+  // ADR 0002, criterion 9: the hash table, the accumulators, the row order, the
+  // batch and the history live in core/, once. Each engine's operators import them
+  // from there, and no engine keeps a copy of its own.
+  const core = (k: string) => join(src, "core", `${k}.ts`);
+  const hashTable = core("hash-table"), accumulators = core("accumulators"), rowOrder = core("row-order");
+  const batch = core("batch"), history = core("history");
+  const uses: Record<string, readonly string[]> = {
+    "engines/kostka/physical/operators/join.ts": [hashTable, batch],
+    "engines/kostka/physical/operators/aggregate.ts": [accumulators, batch],
+    "engines/kostka/physical/operators/sort.ts": [rowOrder, batch],
+    "engines/kostka/coordinator/state.ts": [history],
+    "engines/spark/physical/operators/join.ts": [hashTable, rowOrder, batch],
+    "engines/spark/physical/operators/aggregate.ts": [accumulators, batch],
+    "engines/spark/physical/operators/sort.ts": [rowOrder, batch],
+    "engines/spark/driver/dag-scheduler.ts": [history],
+  };
+  for (const [file, needed] of Object.entries(uses)) {
+    const got = imports(join(src, file));
+    for (const k of needed) assert.ok(got.includes(k), `${file} imports ${relative(root, k)}`);
+  }
+  const copies = files(join(src, "engines")).flatMap((f) => [...readFileSync(f, "utf8").matchAll(/\bclass\s+(HashTable|AggLayout|TopK|Batch|History)\b/g)].map((m) => `${relative(root, f)} declares ${m[1]}`));
+  assert.deepEqual(copies, []);
+});

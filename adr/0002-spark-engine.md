@@ -448,3 +448,18 @@ None.
   needed, the steps show a resubmitted stage with attempt 1, and FetchFailed when a
   stage reading those files was already running. Checked by: a recovery test on SSB
   Q2.1 and the sample's "revenue per city"."
+
+### 2026-11-28: what else the change touches
+
+- **Assumed:** the paths in **Affects** are all the change touches, and the join's
+  key split stays in kostka's planner.
+- **True:** both planners split a join's condition into keys and a residual, and
+  that function was in `engines/kostka/physical/planner.ts`. The change also needs
+  `cluster/memory.ts` (`holdOnDisk`, above), `cluster/blocks.ts` (`DataPlane.lookup`:
+  an executor reads a shuffle file on another node), the sample's queries
+  (`loaders/sample/queries.ts`: "orders from one city", a broadcast join), the
+  workbench's session (`ui/session.ts`: the examples) and `AGENTS.md`.
+- **So:** `splitJoinCondition` moves to `src/sql/plan.ts`, beside the plan nodes it
+  reads: a second use. The change also affects `src/sql/plan.ts`,
+  `src/cluster/blocks.ts`, `src/cluster/memory.ts`, `src/loaders/sample/queries.ts`,
+  `src/ui/session.ts` and `AGENTS.md`. The goal and the design do not change.

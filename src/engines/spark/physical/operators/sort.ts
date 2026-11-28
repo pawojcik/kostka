@@ -91,6 +91,7 @@ export class SortExec extends Ordering {
     const all: Keyed[][] = [...runs.map((r) => ctx.unspill(r, this).map((row) => this.keyed(row))), inMemory];
     const heads = all.map(() => 0);
     const out: Row[] = [];
+    // bestRun gives a run that still has rows, so run i and its head row exist.
     for (let i = bestRun(all, heads, this.cmp); i >= 0; i = bestRun(all, heads, this.cmp)) out.push(all[i]![heads[i]!++]!.row);
     ctx.cpu(total * Math.max(1, Math.log2(all.length + 1)) * COST.sortCompare, this);
     ctx.note(this, `merged ${runs.length} spilled run(s) and ${inMemory.length.toLocaleString("en")} row(s) in memory`);

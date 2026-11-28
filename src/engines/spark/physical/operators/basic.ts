@@ -88,8 +88,9 @@ export class ProjectExec extends SparkOp {
         const inner = e instanceof Alias ? e.child : e;
         return inner instanceof ColumnRef && inner.id === k.id;
       }) : -1;
-      if (i < 0) return { kind: "unknown", n: p.n };
-      keys.push(this.output[i]!.ref());
+      const field = i < 0 ? undefined : this.output[i];
+      if (!field) return { kind: "unknown", n: p.n };
+      keys.push(field.ref());
     }
     return { kind: "hash", keys, n: p.n };
   }
@@ -102,13 +103,7 @@ export class ProjectExec extends SparkOp {
         if (!b) return null;
         checkColumns(b, this.child.output, "Project");
         ctx.cpu(b.rows.length * this.cost, this);
-        const out = new Array<Row>(b.rows.length);
-        for (let i = 0; i < out.length; i++) {
-          const row = b.rows[i]!;
-          const r = new Array(evals.length);
-          for (let j = 0; j < evals.length; j++) r[j] = evals[j]!(row);
-          out[i] = r;
-        }
+        const out: Row[] = b.rows.map((row) => evals.map((e) => e(row)));
         ctx.output(this, out.length);
         return new Batch(this.output, out);
       },

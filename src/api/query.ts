@@ -22,7 +22,8 @@ export interface QueryOptions {
   /** The engine to run on, by name (default: the Database's first engine). */
   engine?: string;
   /** The engine's own settings (kostka: shufflePartitions, joinStrategy,
-   * runtimeFilters). The engine checks them when the query starts. */
+   * runtimeFilters; Spark-style: broadcastThreshold, shufflePartitions,
+   * maxTaskFailures). The engine checks them when the query starts. */
   settings?: Readonly<Record<string, unknown>>;
   /** The same as `settings`, by kostka's old name for them. */
   planner?: Readonly<Record<string, unknown>>;

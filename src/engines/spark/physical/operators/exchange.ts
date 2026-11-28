@@ -25,13 +25,14 @@ export class ShuffleExchange extends SparkOp {
   readonly child: SparkOp;
   readonly target: Exclude<Partitioning, { kind: "unknown" }>;
   /** Its shuffle id: the stage that writes it, and the stages that read it, name it. */
-  shuffle = -1;
+  readonly shuffle: number;
   private readonly keys: Evaluator[];
 
-  constructor(child: SparkOp, target: Exclude<Partitioning, { kind: "unknown" }>) {
+  constructor(child: SparkOp, target: Exclude<Partitioning, { kind: "unknown" }>, shuffle: number) {
     super(child.output);
     this.child = child;
     this.target = target;
+    this.shuffle = shuffle;
     this.keys = target.kind === "hash" ? target.keys.map((k) => compileExpr(k, child.output)) : [];
   }
 
@@ -62,6 +63,7 @@ export class ShuffleExchange extends SparkOp {
     const input = this.child.execute(ctx, partition);
     let rows = 0;
     for (let b = input.next(); b; b = input.next()) {
+      // partitionOf gives a number from 0 to n - 1, and parts has n lists.
       for (const row of b.rows) parts[this.n === 1 ? 0 : partitionOf(this.keys.map((k) => k(row)), this.n)]!.push(row);
       rows += b.rows.length;
     }
@@ -82,11 +84,12 @@ export class ShuffleExchange extends SparkOp {
 export class BroadcastExchange extends SparkOp {
   readonly child: SparkOp;
   /** Its broadcast id: the job that makes it and the stages that read it name it. */
-  broadcast = -1;
+  readonly broadcast: number;
 
-  constructor(child: SparkOp) {
+  constructor(child: SparkOp, broadcast: number) {
     super(child.output);
     this.child = child;
+    this.broadcast = broadcast;
   }
 
   children(): readonly SparkOp[] {

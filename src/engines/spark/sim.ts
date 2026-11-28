@@ -283,7 +283,7 @@ export class SparkExecution implements Execution {
     if (!node.up) throw new RangeError(`node ${n} is gone already`);
     const last = this.events[this.events.length - 1];
     const { at, lost } = this.loop.stop(n, last ? last.ms * 1e6 : 0);
-    this.executorOf(n).gone = true;
+    this.executorOf(n).lost();
     const extra = lost.map((q) => ({ ...this.log(q.event, "lost", q.at), text: `lost with executor ${n}: ${describeMessage(q.event)}` }));
     const event: DriverEvent = { type: "ExecutorLost", executor: n };
     this.handling = { event, at, extra };
@@ -396,12 +396,13 @@ export class SparkExecution implements Execution {
     const units = this.units.filter((u) => u.seq <= at);
     const tasks = d.tasks.filter((t) => t.seq <= at).map((t) => {
       const status = t.status.after(at) ?? "running";
-      const m = status === "running" ? null : t.metrics;
+      const o = status === "running" ? null : t.outcome;
+      const m = o?.metrics ?? null;
       const ran = units.find((u) => u.tid === t.tid);
       return {
         tid: t.tid, stage: t.stage, stage_attempt: t.stageAttempt, partition: t.partition, attempt: t.attempt, executor: t.executor, slot: t.slot,
         status, launched_ms: t.at / 1e6, ran: !!ran, start_ms: ran ? ran.start / 1e6 : null, end_ms: ran ? ran.end / 1e6 : null,
-        error: status === "failed" || status === "lost" ? t.error : null, fetch_failed: status === "failed" && t.fetchFailed,
+        error: o?.error ?? null, fetch_failed: o?.fetchFailed ?? false,
         input_bytes: m?.inputBytes ?? 0, shuffle_read_bytes: m?.shuffleReadBytes ?? 0, shuffle_write_bytes: m?.shuffleWriteBytes ?? 0,
         spill_bytes: m?.spillBytes ?? 0, peak_memory: m?.peakMemory ?? 0,
         time_ms: Object.fromEntries(CATEGORIES.map((c) => [c, (m?.time[c] ?? 0) / 1e6])),
@@ -411,7 +412,7 @@ export class SparkExecution implements Execution {
     const opRows = new Map<number, number>();
     const latest = new Map<string, (typeof d.tasks)[number]>();
     for (const t of d.tasks) if (t.seq <= at && t.status.after(at) === "success") latest.set(`${t.stage}:${t.partition}`, t);
-    for (const t of latest.values()) for (const o of t.metrics?.ops ?? []) opRows.set(o.op, (opRows.get(o.op) ?? 0) + o.rows);
+    for (const t of latest.values()) for (const o of t.outcome?.metrics?.ops ?? []) opRows.set(o.op, (opRows.get(o.op) ?? 0) + o.rows);
     const stageOf = new Map<number, number>();
     for (const s of this.stages.stages) for (const o of s.ops) stageOf.set(o.id, s.id);
     for (const s of this.stages.stages) if (s.writes) stageOf.set(s.writes.id, s.id);
