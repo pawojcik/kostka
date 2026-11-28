@@ -5,37 +5,29 @@
 
 import { update, type Json, type Query } from "./store.ts";
 import { ms, n } from "./format.ts";
+import { viewsOf } from "./engines/index.ts";
 
+/** What a node is, whatever engine runs it; an engine's views say how it runs it. */
 const NODE_HELP: Record<string, string> = {
-  Scan: "Reads one version of a table: one split per data file. Projection pushdown narrows its columns; file pruning its files.",
+  Scan: "Reads one version of a table. Projection pushdown narrows its columns; file pruning its files.",
   Filter: "Keeps the rows for which the condition is TRUE (not FALSE or NULL).",
   Project: "Computes its output columns from its input.",
-  Aggregate: "Groups rows by its keys and folds each group with its aggregates. Runs in two phases: partial per split, then merged per partition.",
-  Join: "A hash join: the right side is built into a hash table, the left side probes it.",
-  Sort: "Sorts all its rows: each split sorts what it got, then one split merges the sorted runs.",
+  Aggregate: "Groups rows by its keys and folds each group with its aggregates.",
+  Join: "Pairs rows of its two sides by the join condition; the right side is the smaller (build) side.",
+  Sort: "Sorts all its rows.",
   Limit: "Passes on the first n rows; without an ORDER BY below it, which rows is not defined.",
-  TopN: "ORDER BY with LIMIT: keeps only the best n rows of each split, then merges them.",
+  TopN: "ORDER BY with LIMIT: keeps only the best n rows.",
 };
 
-export function opsOfNode(state: Json, node: number): Json[] {
-  return (state?.pipelines ?? []).flatMap((p: Json) => p.ops.filter((o: Json) => o.node === node).map((o: Json) => ({ ...o, pipeline: p.index })));
-}
-
-/** Rows a node produced: out of the last of its operators that is not a sink. */
-function actualRows(state: Json, node: number): number | null {
-  const ops = opsOfNode(state, node).filter((o) => o.role !== "sink");
-  if (!ops.length || !state?.units_run) return null;
-  const last = ops[ops.length - 1];
-  return last.metrics.rows_out;
-}
-
 function NodePanel({ q, node, state, linkOps }: { q: Query; node: Json; state: Json; linkOps: boolean }) {
-  const ops = linkOps ? opsOfNode(state, node.id) : [];
-  const actual = linkOps ? actualRows(state, node.id) : null;
+  const v = state ? viewsOf(state.engine) : null;
+  const ops = linkOps && v ? v.nodeOps(state, node.id) : [];
+  const actual = linkOps && v ? v.nodeRows(state, node.id) : null;
+  const how = v?.nodeHelp[node.kind];
   return (
     <div class="npanel stack" onClick={(e) => e.stopPropagation()}>
       <div class="row"><b class="grow">{node.kind}</b><button class="x" onClick={() => { q.sel = null; update(); }}>×</button></div>
-      {NODE_HELP[node.kind] && <p class="note">{NODE_HELP[node.kind]}</p>}
+      {NODE_HELP[node.kind] && <p class="note">{NODE_HELP[node.kind]}{how ? ` ${how}` : ""}</p>}
       <dl class="kv">
         {node.detail && [<dt>detail</dt>, <dd>{node.detail}</dd>]}
         {node.estimate >= 0 && [<dt>estimate</dt>, <dd>{n(node.estimate)} rows</dd>]}
@@ -44,7 +36,7 @@ function NodePanel({ q, node, state, linkOps }: { q: Query; node: Json; state: J
       <div><span class="note">output columns</span><ul class="cols">{node.columns.map((c: Json) => <li><code>{c.name}</code> <span class="faint">{c.type}</span></li>)}</ul></div>
       {ops.length > 0 && (
         <div class="oplinks"><span class="note">operators</span><ul>{ops.map((o) => (
-          <li><button class="link" onClick={() => { q.sub = "program"; q.sel = { kind: "op", id: o.id }; update(); }}>{o.id} {o.label}</button></li>
+          <li><button class="link" onClick={() => { o.go(q); update(); }}>{o.label}</button></li>
         ))}</ul></div>
       )}
     </div>
@@ -55,7 +47,7 @@ export function PlanTree({ q, tree, state, changed, linkOps = false, tag }: { q:
   const walk = (node: Json, path: string): Json => {
     const key = `${tag}:${node.id}`;
     const open = q.sel?.kind === "node" && q.sel.id === key;
-    const actual = linkOps && state ? actualRows(state, node.id) : null;
+    const actual = linkOps && state ? viewsOf(state.engine).nodeRows(state, node.id) : null;
     return (
       <div class="tree" data-tour="plan">
         <div class="tcell">
@@ -144,7 +136,7 @@ export function PlanView({ q, state }: { q: Query; state: Json }) {
           : st.changes
             ? <>After <b>{st.rule}</b>: it changed the plan in {st.changes} pass{st.changes === 1 ? "" : "es"}{st.passes > st.changes ? ", then found nothing more to do" : ""}. Dashed nodes differ from the stage before.</>
             : <><b>{st.rule}</b> found nothing to change: the plan is the same as the stage before.</>}
-        {k === last && <> This is the optimized plan the program is compiled from: with the query run, each node shows the rows it produced; click one to see its operators.</>}
+        {k === last && <> This is the optimized plan the engine plans from: with the query run, each node shows the rows it produced; click one to see its operators.</>}
         {" "}≈ is the optimizer's row estimate from the catalog's statistics.
       </p>
       <PlanTree q={q} tree={st.tree} state={state} linkOps={k === last} changed={prev && st.changes ? diff(prev.tree, st.tree) : undefined} tag={k === last ? "o" : `s${k}`} />

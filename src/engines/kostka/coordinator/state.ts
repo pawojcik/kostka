@@ -9,6 +9,7 @@
 // the state as it was after any step.
 
 import type { Row } from "../../../core/types.ts";
+import { History } from "../../../core/history.ts";
 import type { PieceRef, Split } from "../physical/buffer.ts";
 import { CATEGORIES, type Category } from "../physical/context.ts";
 import type { FilterKeys } from "../physical/operators/runtime-filter.ts";
@@ -19,40 +20,6 @@ export type SplitStatus = "pending" | "queued" | "done" | "skipped" | "failed";
 export type OutputStatus = "available" | "lost" | "released";
 export type BufferStatus = "empty" | "filling" | "sealed" | "released";
 export type WorkerStatus = "up" | "gone";
-
-/** A value as it changed, step by step. */
-export class History<T> {
-  private readonly at: number[] = [];
-  private readonly values: T[] = [];
-  constructor(seq: number, v: T) {
-    this.set(seq, v);
-  }
-  set(seq: number, v: T): void {
-    if (this.at.length && this.at[this.at.length - 1] === seq) this.values[this.values.length - 1] = v;
-    else {
-      this.at.push(seq);
-      this.values.push(v);
-    }
-  }
-  get now(): T {
-    return this.values[this.values.length - 1]!;
-  }
-  /** The value after step `seq`, or undefined before it existed. */
-  after(seq: number): T | undefined {
-    let lo = 0, hi = this.at.length - 1, best = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (this.at[mid]! <= seq) {
-        best = mid;
-        lo = mid + 1;
-      } else hi = mid - 1;
-    }
-    return best < 0 ? undefined : this.values[best];
-  }
-  get since(): number {
-    return this.at[0]!;
-  }
-}
 
 export class WorkerState {
   readonly id: number;

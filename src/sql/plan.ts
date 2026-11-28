@@ -18,7 +18,8 @@
 // `planIds` numbers a plan's nodes (in preorder, a node shared by two parents once),
 // so that the workbench's plan trees and an engine's operators name a node the same.
 
-import { AggCall, Alias, type Expr, Field, type SortKey } from "../core/expr.ts";
+import { AggCall, Alias, type Expr, Field, type SortKey, conjuncts, isCall, refIds, subsetOf } from "../core/expr.ts";
+import { andAll } from "../core/functions/index.ts";
 import type { ColumnType } from "../core/types.ts";
 import type { DataFile, TableMeta } from "../catalog/meta.ts";
 
@@ -277,4 +278,31 @@ export function planIds(root: PlanNode): Map<PlanNode, number> {
   };
   walk(root);
   return ids;
+}
+
+/** Splits a join condition into equality keys and a residual (every engine's join
+ * planning): each top-level `l = r`
+ * conjunct with one side on each input becomes a key pair. */
+export function splitJoinCondition(cond: Expr | null, leftIds: Set<number>, rightIds: Set<number>) {
+  const leftKeys: Expr[] = [], rightKeys: Expr[] = [], rest: Expr[] = [];
+  if (!cond) return { leftKeys, rightKeys, residual: null };
+  const side = (e: Expr) => {
+    const ids = refIds(e);
+    if (ids.size && subsetOf(ids, leftIds)) return "left";
+    if (ids.size && subsetOf(ids, rightIds)) return "right";
+    return null;
+  };
+  for (const c of conjuncts(cond)) {
+    if (isCall(c, "=")) {
+      const [a, b] = c.args as [Expr, Expr];
+      const sa = side(a), sb = side(b);
+      if (sa && sb && sa !== sb) {
+        leftKeys.push(sa === "left" ? a : b);
+        rightKeys.push(sa === "left" ? b : a);
+        continue;
+      }
+    }
+    rest.push(c);
+  }
+  return { leftKeys, rightKeys, residual: andAll(rest) };
 }

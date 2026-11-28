@@ -64,6 +64,33 @@ describe("workbench session", () => {
     structuredClone(first);
   });
 
+  test("the Spark-style engine through the Session: steps, next task, a stopped node; plain data", async () => {
+    const s = new Session(openDatabase());
+    await s.loadSample();
+    const info = s.info();
+    assert.deepEqual(info.engines.map((e) => e.name), ["kostka", "spark"]);
+    assert.ok(info.examples.some((e) => e.id === "s3" && e.dataset === "Sample"), "the sample's third example");
+    const c = s.compile("q", "select u.name, count(*) orders from orders o join users u on o.user_id = u.id where u.city = 'Gdansk' group by u.name", { engine: "spark", cluster: { nodes: 2, cores: 2 } });
+    assert.equal(c.plans.engine, "spark");
+    assert.match(c.plans.explain, /BroadcastHashJoin/);
+    assert.equal(c.events[0]!.kind, "SQLExecutionStart");
+    const t = await s.next("q", c.at, c.total);
+    assert.equal((t.state as any).event.kind, "TaskRan");
+    const gone = await s.stopNode("q", 1, 0);
+    assert.ok(gone.events.some((e: any) => e.kind === "ExecutorLost"));
+    const r = await s.run("q", 0);
+    const st = r.state as any;
+    assert.ok(st.done, st.error);
+    assert.equal(st.engine, "spark");
+    assert.ok(st.jobs.length === 2 && st.stages.length === 3 && st.tasks.length > 0 && st.ops.length > 0);
+    assert.equal(st.nodes[0].cores.length, 2);
+    for (let at = 0; at < r.total; at += 7) {
+      const x = s.state("q", at);
+      assert.equal(x.engine, "spark");
+      assert.deepEqual(structuredClone(x), x);
+    }
+  });
+
   test("a failing query reports its error in the state", async () => {
     const s = new Session(openDatabase());
     await s.loadSample();

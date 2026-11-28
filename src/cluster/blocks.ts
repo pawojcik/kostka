@@ -71,6 +71,15 @@ export class DataPlane {
     this.nodes = nodes;
   }
 
+  /** Block `id` of node `node`, or undefined if the node dropped it (its engine freed
+   * it). Throws BlockLostError if that node is gone. */
+  lookup(node: number, id: number): Block | undefined {
+    const holder = this.nodes[node];
+    if (!holder) throw internal(`there is no node ${node}`);
+    if (!holder.up) throw new BlockLostError(node, id);
+    return holder.blocks.get(id);
+  }
+
   /** Block `id` of node `node`. Throws BlockLostError if that node is gone. */
   read(node: number, id: number): Block {
     const holder = this.nodes[node];

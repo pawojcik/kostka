@@ -22,7 +22,7 @@ import type { Field } from "../../../core/expr.ts";
 import type { Row } from "../../../core/types.ts";
 import type { DataFile } from "../../../catalog/meta.ts";
 import type { PlanNode } from "../../../sql/plan.ts";
-import { Batch } from "./batch.ts";
+import { Batch } from "../../../core/batch.ts";
 import type { OutputBuffer, Split } from "./buffer.ts";
 import type { Charged, ExecContext } from "./context.ts";
 import type { RuntimeFilter } from "./operators/runtime-filter.ts";

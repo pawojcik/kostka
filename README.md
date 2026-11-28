@@ -8,8 +8,9 @@ versioned sets of immutable Parquet files, described by a SQLite catalog. Querie
 are SQL `SELECT`s, compiled into a typed logical plan and optimized by rules; an
 **engine** then plans and runs the optimized plan step by step on a **simulated
 cluster** of nodes. kostka's own engine plans pipelines and runs them with a
-coordinator and workers, Trino-style. Everything runs in the browser (the workbench, in `docs/`) and
-in Node (tests, scripts).
+coordinator and workers, Trino-style; a Spark-style engine cuts the same plan into
+stages and runs them as tasks with a driver and executors. Everything runs in the
+browser (the workbench, in `docs/`) and in Node (tests, scripts).
 
 ```ts
 import { openDatabase } from "./src/node.ts";
@@ -35,13 +36,17 @@ committed.
 The code is split by phase. Each layer only imports from the layers above it in this
 list. The shared layers (everything but `engines/`) know an engine only through
 `execution/engine.ts`; `src/node.ts` and the workbench's worker give a Database every
-engine there is (`engines/index.ts`), and the UI imports everything.
+engine there is (`engines/index.ts`), and the UI imports everything. The two engines
+never import each other.
 
 ```
 src/
   core/         types and values, errors, bound expressions, functions, hashing,
                 the categories of time, the CPU cost model and row sizes (plain
-                models, used by engines' operators and the cluster alike)
+                models, used by engines' operators and the cluster alike), and the
+                kernels every engine's operators share: batches, the hash table,
+                aggregate state in two phases (accumulators), row order, and a value
+                step by step (history)
     functions/  the function registry, scalar functions and operators, casts, aggregates
   catalog/      table metadata in SQLite: tables, snapshots, files, per-file statistics
   storage/      file stores (memory, Node, OPFS), Parquet data files, statistics
@@ -65,7 +70,15 @@ src/
       protocol.ts  commands and events
       sim.ts    SimExecution: the coordinator and one worker per node on the cluster
       unit-context.ts  the context a split runs in: time, IO, fetching pieces
-  loaders/      CSV import, column generators, NYC taxi, SSB and TPC-DS data and queries
+    spark/      the Spark-style engine: engine.ts (its settings and kinds of step)
+      physical/   the planner, the Spark operators (operators/), the cut into jobs
+                  and stages, the TaskContext operators run in
+      driver/   the DAGScheduler, the TaskScheduler and the MapOutputTracker (domain)
+      executor/ executors: task slots, the block manager, task memory (domain)
+      protocol.ts  commands and events
+      sim.ts    SparkExecution: the driver and one executor per node on the cluster
+  loaders/      CSV import, column generators, the users/orders sample's queries,
+                NYC taxi, SSB and TPC-DS data and queries
   node.ts       openDatabase on Node, with every engine
   ui/           the workbench: Session (in a Web Worker), RPC, the SQL editor, the
                 Preact app (app/; each engine's own views in app/engines/)
@@ -83,6 +96,8 @@ A query goes through:
 SQL ─parse─▶ AST ─analyze─▶ logical plan ─rules─▶ optimized plan ─engine─▶ an Execution
 kostka: optimized plan ─physical planner─▶ pipelines + output buffers
         ─coordinator─▶ splits ─workers─▶ result
+spark:  optimized plan ─planner─▶ Spark plan ─cut─▶ jobs and stages
+        ─driver─▶ tasks ─executors─▶ result
 ```
 
 ## Cross-cutting semantics
@@ -504,7 +519,7 @@ plan, plans it in its own way and runs it on the shared simulated **cluster**
 and a history of steps. The API, the Session and the workbench's shared views see
 only what every engine has (an `Execution` and its `ExecState`); each engine's own
 objects pass through its state to its own views. A query picks its engine by name
-(`engine`, default the first: `kostka`); an unknown name fails with
+(`engine`: `kostka`, the default, or `spark`); an unknown name fails with
 `UnknownEngineError`, which lists the engines there are.
 
 kostka's engine is the rest of this section. Its execution is a small distributed system. Its **domain** is the coordinator and the
@@ -639,7 +654,7 @@ each node and connects the coordinator and the workers to it.
 - **Table storage**: data files are read from shared storage (storage time).
 - **Settings** (`config.ts`): nodes (1 to 64, the workbench offers 1, 2, 4 and 8;
   `workers` is another name for it), cores per node (1 to 64, default 1; kostka uses
-  core 0 only), memory per node (default 2 MB),
+  core 0 only, the Spark-style engine every core), memory per node (default 2 MB),
   disk per node (default 16 MB), an IO profile (cloud, fast, slow, none: bandwidth
   and latency of shared storage, local disk and network), batch rows (the size of a
   batch, and of the pieces a sink writes; default 4,096), split rows, CPU time
@@ -677,7 +692,8 @@ interface Execution {
 `failed`, `elapsed_ms`, `next`, `cluster`, `nodes` (each node's frame: status, each
 core's clock, time by category, bytes, memory and disk), `units` (each unit on its
 node and core: start, end, label, group, failure, segments) and `result_rows`; then
-the engine's own objects (kostka: pipelines, splits, buffers, filters, the log).
+the engine's own objects (kostka: pipelines, splits, buffers, filters, the log; Spark:
+operators, joins, jobs, stages, tasks, shuffles, the log).
 `Engines` (`registry.ts`) holds the engines a Database was given, by name.
 
 kostka's `SimExecution` is its coordinator, its workers and the simulation above;
@@ -709,6 +725,135 @@ tables, its clock and time). What only grows (splits, outputs, units, pieces) ke
 the step it appeared at, values that change keep their history by step, and the
 rest is kept per step as a frame that shares what the step did not touch with the
 frame before.
+
+## Spark-style engine (`engines/spark/`)
+
+Most people who learn about distributed query engines meet Spark first. This engine
+runs the same optimized plan the way Spark does: a plan cut into **stages** at every
+shuffle, each stage run as **tasks**, one per partition, in the **task slots** of
+executors that use every core of their node. It shares nothing with kostka's engine
+but the shared layers: the two never import each other. Comparing them on the same
+query and cluster shows what each design costs: stage barriers against pipelines,
+shuffle files on disk against output buffers in memory, a broadcast threshold in
+bytes against kostka's rule, task retries and stage resubmission against kostka's
+recovery from lineage.
+
+### Planning (`physical/planner.ts`)
+
+The planner maps each logical node to Spark's operators (`physical/operators/`), and
+adds an **Exchange** wherever a child's partitioning is not what its parent needs, as
+Spark's EnsureRequirements does:
+
+```
+Scan              FileScan (one partition per data file; one empty one with no files)
+Filter, Project   Filter, Project
+Aggregate         HashAggregate(partial) → Exchange hashpartitioning(keys, n)
+                  → HashAggregate(final); SinglePartition without keys
+Join, equi-keys   BroadcastExchange (the right side) + BroadcastHashJoin when the build
+                  side's estimated bytes ≤ broadcastThreshold; else a hash Exchange and
+                  a Sort on both sides → SortMergeJoin
+Join, no keys     BroadcastExchange (the right side) + BroadcastNestedLoopJoin
+Sort              Exchange SinglePartition → Sort
+TopN              TakeOrderedAndProject(partial) → Exchange SinglePartition
+                  → TakeOrderedAndProject(final)
+Limit             LocalLimit → Exchange SinglePartition → GlobalLimit
+```
+
+An operator that needs one partition gets no Exchange if its child is one already (a
+Limit above a Sort). The **estimated build bytes** are the optimizer's row estimate
+times the row width of its columns (`core/rows.ts`, `fieldsBytes`: 8 bytes a number,
+1 a bool, 16 a string, plus the row overhead). The right side is the build side, and a
+left join keeps the left side's unmatched rows, so the right side can always be
+broadcast. Operators pull batches from their children (Spark's iterator model);
+the ones between two exchanges run in one task, batch by batch: Spark's whole-stage
+code generation would compile them into one function, a **WholeStageCodegen** box.
+Nothing is generated; the name says what Spark would do.
+
+Settings (a query's `settings`): `broadcastThreshold` (bytes, default 32768, like
+Spark's autoBroadcastJoinThreshold of 10 MB scaled to kostka's small nodes; -1: never
+broadcast), `shufflePartitions` (`"auto"`, 2 per core in the cluster: nodes × cores ×
+2, or a number), `maxTaskFailures` (default 4). The engine checks them when the query
+starts. The cluster settings are shared (`ClusterConfig`).
+
+### Jobs, stages and tasks (`physical/stages.ts`)
+
+- A **job** runs one action. The query's result is one job; each BroadcastExchange is
+  a job of its own, run before the jobs that read it (independent ones side by side).
+- A job is cut into **stages** at each Exchange. A **ShuffleMapStage** ends in one:
+  each of its tasks writes one **shuffle file**, its rows grouped by reduce partition
+  with an index of where each partition starts (Spark's sort-based shuffle). A
+  **ResultStage** ends at the job's output: its tasks send their rows to the driver.
+- A stage has one **task** per partition: one per file in a scan stage,
+  `shufflePartitions` in one that reads a hash Exchange, one in one that reads a
+  SinglePartition one.
+- A stage starts only when every parent stage is done: stages are **barriers**, and no
+  data flows between them while a parent runs.
+
+### The driver and the executors
+
+The **driver** (`driver/`, domain) reads no rows but the result's and the broadcasts':
+- **DAGScheduler**: starts jobs once the broadcasts they read are made, submits a stage
+  when its parents' shuffle output is available, records results, frees shuffles and
+  broadcasts no stage reads any more, and recovers (below). Its steps are named like
+  Spark's listener events.
+- **TaskScheduler**: each stage attempt is a task set. It gives tasks to free slots,
+  first in first out by job and stage, each to the executor with the most free slots
+  (no data locality), and runs a failed task again, up to `maxTaskFailures` attempts.
+- **MapOutputTracker**: where each map task's shuffle file is (node, block, bytes per
+  reduce partition). Reduce tasks are launched with these locations.
+
+An **executor** (`executor/`, domain), one per node:
+- **task slots**: one per core (Spark's spark.task.cpus = 1). Slot *i* runs its task on
+  core *i*, so a node's tasks run side by side and share its IO channel.
+- **block manager**: the node's shuffle files (on its disk) and the broadcasts it has
+  fetched (in its memory). A broadcast is fetched from the driver once per executor and
+  built into one hash table, which every task there shares.
+- **memory**: each running task may hold a fixed share, memoryMB / cores. A Sort that
+  outgrows it spills sorted runs to the local disk and merges them; a HashAggregate
+  that does not fit fails the task with OutOfMemoryError.
+
+Commands (driver → executor) and events (→ driver), `protocol.ts`:
+
+| message | |
+|---|---|
+| `LaunchTask` | stage, attempt, partition, task attempt, slot; where its shuffle input is (the MapOutputTracker's locations); the broadcasts it reads |
+| `RemoveShuffle`, `RemoveBroadcast` | free the files or the copy: no stage left reads them |
+| `TaskFinished` | a map task's **MapStatus** (its shuffle file), or a result task's rows; metrics |
+| `TaskFailed` | an error, or **FetchFailed**: a shuffle file it read is gone |
+| `ExecutorLost` | from the infrastructure: a node is gone, with its executor, its running tasks and its shuffle files |
+
+### Recovery
+
+- **A node is gone**: its running tasks run again on other executors; this does not
+  count toward `maxTaskFailures`. Its shuffle files are lost, and the driver
+  unregisters them. A stage submitted later sees its parent's missing outputs and
+  resubmits the parent first; a task of a stage already running fails with
+  **FetchFailed**, that stage attempt fails, the parent is resubmitted
+  (**StageResubmitted**, attempt 1) for its missing partitions only, and the failed
+  stage runs again after it. A stage is tried at most 4 times.
+- **No executor left**: the query fails: "every node is gone: no executor can run
+  stage N".
+- **A task fails `maxTaskFailures` times** (out of memory, out of disk): the query
+  fails with Spark's message, naming the task (stage, partition, attempt) and its
+  error, which says what to do.
+
+### Time and the cluster (`sim.ts`)
+
+Executor *i* is on node *i*; `sim.ts` turns the driver's commands into tasks on cores,
+and a stopped node into ExecutorLost. A task is a unit on its slot's core: CPU from
+the shared cost model (or measured), reading Parquet from storage, writing and reading
+shuffle files and spilled runs on the node's disk (the spill write and spill read
+segments), and fetching a shuffle file from another node, or a broadcast from the
+driver, over the network.
+
+Its kinds of step: `SQLExecutionStart`, `JobStart`, `StageSubmitted`, `TaskStart` (a
+LaunchTask), `TaskRan` (an executor ran a task: `Session.next` stops at these),
+`TaskEnd` (the driver handles its TaskFinished or TaskFailed), `StageCompleted`,
+`JobEnd`, `ExecutorLost`, `FetchFailed`, `StageResubmitted`, `SQLExecutionEnd` and
+`SQLExecutionFailed`. Its state has the Spark plan's operators (with the stage each
+belongs to and the rows it gave out), the join choices, jobs, stages (attempts, tasks,
+bytes), tasks, the shuffles' map outputs, and each executor's slots, shuffle files and
+broadcasts.
 
 ## API (`api/`)
 
@@ -751,11 +896,16 @@ not available (another tab holds it, a private window) everything is in memory.
 - **SQL editor** (`editor.ts`): CodeMirror 6 with completion of tables, columns
   (with their types, through aliases) and functions (with signatures) from the
   catalog, and squiggles under parse and analysis errors as you type.
-- **Tutorials** (`app/tutorial.tsx`): a Tutorial button opens four guided scenarios:
+- **Tutorials** (`app/tutorial.tsx`): a Tutorial button opens five guided scenarios:
   your first query (NYC taxi), how the work is split (SSB Q2.1: broadcast and shuffle
   joins, splits, partitions), a worker fails (NYC taxi on 3 workers: lost outputs,
-  recovery, then every worker stopped) and what the optimizer saves you (SSB Q4.1 with
-  rules turned off: refused cross joins, then the cost of reading every column). Each
+  recovery, then every worker stopped), what the optimizer saves you (SSB Q4.1 with
+  rules turned off: refused cross joins, then the cost of reading every column), and
+  Spark-style: stages, shuffles and slots (the sample on the Spark-style engine:
+  "revenue per city" shuffles and "orders from one city" broadcasts, a higher threshold
+  broadcasts the first too, 2 cores run tasks side by side and wait for IO, and a node
+  stopped in the last stage gives FetchFailed and a resubmitted stage). kostka's
+  tutorials run on kostka: starting one sets its query's engine to kostka. Each
   loads its data if needed and opens its query; a callout shows one step at a time and
   a ring marks the element it is about (`data-tour` attributes; a control inside the
   closed Options is marked by Options). A step asks for at most one action, and the
@@ -766,9 +916,12 @@ not available (another tab holds it, a private window) everything is in memory.
 - **App** (`app/`, Preact): a Tables tab (load CSV, NYC taxi, SSB, TPC-DS or a sample, create empty
   tables; a table's rows at any version, history and revert, data files with their
   statistics, a generator) and a tab per query: the SQL, the options to compile
-  with in five groups (optimizer rules; physical planner: join distribution, shuffle
-  partitions, runtime filters; cluster: workers, memory, disk, IO speeds; data flow:
-  batch and split size; simulation: CPU time), Compile / Step / Next split / Wave / Finish / Run, a
+  with: the **engine** ("kostka (pipelines)" or "Spark-style (stages and tasks)"), then
+  five groups (optimizer rules; the engine's own settings: for kostka, join
+  distribution, shuffle partitions, runtime filters; for Spark, the broadcast threshold,
+  shuffle partitions and max task failures; cluster: nodes, cores per node, memory,
+  disk, IO speeds; data flow: batch and split size; simulation: CPU time), Compile /
+  Step / Next split (Next task) / Wave / Finish / Run, a
   history slider over every step, a banner saying what the step shown did, and
   views: plan (as a tree joined by lines, by stage: the analyzed plan, then the
   plan after each rule; a rule that changed nothing is marked), program (a graph
@@ -798,7 +951,18 @@ not available (another tab holds it, a private window) everything is in memory.
   hatched. Plan, steps, trace, the timeline and result are shared by every engine
   (`app/timeline.tsx`, `events.tsx`, `trace.tsx`); program, query state and workers
   are kostka's own (`app/engines/kostka/`), and the query tab picks an engine's views
-  by `state.engine` (`app/engines/index.ts`).
+  by `state.engine` (`app/engines/index.ts`). The Spark-style engine's own views
+  (`app/engines/spark/`) are in Spark's orange, and the query's header says
+  "Spark-style engine": **Plan by stage** (in place of Program: the stages as cards in
+  columns from the scans to the result, each with its operators in a WholeStageCodegen
+  box and its Exchange or BroadcastExchange as the edge to the stages that read it;
+  click a join to see why it was broadcast or shuffled), **Jobs · Stages · Tasks** (in
+  place of Query state, after Spark's web UI: jobs with their stages done; stages with
+  their attempt, tasks done, running and failed, input, shuffle read and write, spill
+  and time; the tasks of the stage chosen with partition, attempt, executor, slot,
+  status, time, spill and error) and **Executors** (in place of Workers: the timeline,
+  each executor's slots, busy or free and with which task, the memory per running
+  task, what its node holds, its shuffle files and broadcasts, failed tasks, and Stop).
 
 `npm run dev` rebuilds on every change and serves `docs/` on http://127.0.0.1:8765
 (unminified, with source maps). `npm run build` bundles `src/ui/main.tsx` → `docs/app.js` and `src/ui/worker.ts` →
@@ -808,8 +972,14 @@ and copies `sqlite3.wasm`, the stylesheet and `index.html`.
 ## Tests (`test/`)
 
 `node --test`, mirroring `src/`. Query results are checked against SQLite
-(`node:sqlite`) on the same rows: hand-written queries over small tables, and every
-NYC taxi, SSB and TPC-DS example on 1, 4 and 8 workers, ignoring row order unless the query sorts.
+(`node:sqlite`) on the same rows: hand-written queries over small tables (on kostka,
+and on the Spark-style engine with 1, 3 and 4 nodes, 1 and 2 cores, and broadcasts off
+or always), and every NYC taxi, SSB and TPC-DS example on 1, 4 and 8 workers, ignoring
+row order unless the query sorts. The Spark-style engine's tests (`test/engines/spark/`)
+cover the planner (broadcast or shuffle, jobs, stages and task counts), the driver and
+the executor with no simulation, stages as barriers, slots and cores, recovery from a
+node stopped at 20 steps, out of memory after 4 attempts, and a sort that spills; the
+shared kernels have their own (`test/core/kernels.test.ts`).
 kostka's steps and rows are checked against a fixture recorded before the engine seam
 (`test/fixtures/golden-kostka.json`), on 1 and 2 cores. A toy engine registered only
 in the tests runs through the Database and the Session, the cluster's parts have

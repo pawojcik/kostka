@@ -1,7 +1,8 @@
 // A node's memory and disk: what it holds, and the decision to spill. Infrastructure,
 // shared by every engine. An engine holds two kinds of things:
 //
-// - blocks (blocks.ts): rows waiting for their readers, which can spill;
+// - blocks (blocks.ts): rows waiting for their readers, which can spill, or go
+//   straight to disk (holdOnDisk);
 // - state that cannot spill: hash tables, groups, sort buffers.
 //
 // When something doesn't fit, blocks are spilled to the local disk, oldest first; a
@@ -15,10 +16,9 @@
 
 import { OutOfDiskError, OutOfMemoryError, internal } from "../core/errors.ts";
 import type { Block } from "./blocks.ts";
+import { mb } from "../core/rows.ts";
 
-export function mb(bytes: number): string {
-  return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(0)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
+export { mb };
 
 interface Holding {
   key: string;
@@ -101,6 +101,22 @@ export class MemoryPool {
     this.held.set(key, h);
     this.memory += bytes;
     this.peakMemory = Math.max(this.peakMemory, this.memory);
+  }
+
+  /** Puts `block` straight on the local disk, never in memory (Spark's shuffle files
+   * are written to disk): the disk write is charged to `run`. Throws OutOfDiskError if
+   * it doesn't fit. */
+  holdOnDisk(run: SpillSink, key: string, kind: string, label: string, block: Block): void {
+    if (this.held.has(key)) throw internal(`${this.owner} already holds ${key}`);
+    if (this.disk + block.bytes > this.diskCapacity) {
+      throw new OutOfDiskError(`${this.owner} ran out of disk: ${label} needs ${mb(block.bytes)}, but only ${mb(Math.max(0, this.diskCapacity - this.disk))} of its ${mb(this.diskCapacity)} disk are free. ${this.diskAdvice}`);
+    }
+    // written to disk on purpose: not a spill, so it is not counted as one
+    block.spilled = true;
+    this.held.set(key, { key, kind, label, bytes: block.bytes, onDisk: true, block, advice: "" });
+    this.disk += block.bytes;
+    this.peakDisk = Math.max(this.peakDisk, this.disk);
+    run.spillWrite(block.bytes);
   }
 
   grow(run: SpillSink, key: string, bytes: number): void {

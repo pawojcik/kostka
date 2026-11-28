@@ -2,7 +2,8 @@
 
 kostka is a small OLAP engine for learning: SQL over Parquet files, compiled and
 optimized, then planned and run by an engine on a simulated cluster (kostka's own:
-pipelines, a coordinator and workers), with a browser workbench in `docs/`. Its purpose is to be understood, so clarity beats cleverness and
+pipelines, a coordinator and workers; or a Spark-style one: stages, a driver and
+executors), with a browser workbench in `docs/`. Its purpose is to be understood, so clarity beats cleverness and
 speed. `README.md` is the spec: the layout, every phase and the workbench.
 
 Keep this file short and true: if you find something here stale or wrong, fix it.
@@ -10,18 +11,21 @@ Keep this file short and true: if you find something here stale or wrong, fix it
 ## Principles
 
 - **Modules by purpose:** parser, analyzer, optimizer, planner, coordinator, worker,
-  storage. Not by kind (no `utils/`, `types/`, `helpers/` grab bags).
+  storage; each engine's own (kostka's coordinator and workers, Spark's driver and
+  executors). Not by kind (no `utils/`, `types/`, `helpers/` grab bags).
 - **Narrow and deep:** a module hides a lot behind a small interface.
 - **Depend on interfaces:** a module uses another only through its minimal public
   interface, never its implementation details. Layers import only from layers above
   them (Layout in `README.md`).
 - **Onion architecture:** domain objects in the middle, physical infrastructure (IO,
   storage, transport, threads, clocks, the simulation) outside, behind interfaces the
-  domain defines. In an engine (`engines/kostka/`), the coordinator and workers are
-  the domain: they talk only by commands and events, share no mutable objects, and
-  know nothing of time or transport; `cluster/` and `engines/kostka/sim.ts` are
+  domain defines. In an engine, the scheduler and the nodes' runners are the domain
+  (`engines/kostka/`: the coordinator and workers; `engines/spark/`: the driver and
+  executors): they talk only by commands and events, share no mutable objects, and
+  know nothing of time or transport; `cluster/` and each engine's `sim.ts` are
   infrastructure that real IO could replace. The shared layers never import an
-  engine: they use `execution/engine.ts`.
+  engine: they use `execution/engine.ts`; the engines never import each other, and
+  what both need lives in `core/`.
 - **Domain objects are unit-testable** without the infrastructure (no files, no
   simulation).
 - No abstraction until a second use needs it.

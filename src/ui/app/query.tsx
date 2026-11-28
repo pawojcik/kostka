@@ -15,11 +15,6 @@ import { ms, n } from "./format.ts";
 
 const check = (sql: string) => call("check", sql);
 
-const SAMPLE_QUERIES = [
-  { id: "s1", dataset: "Sample", needs: ["orders.user_id", "users.city"], title: "Sample · revenue per city", about: "A join and an aggregate over the users/orders sample.", sql: "select u.city, count(*) orders, round(sum(o.amount), 2) revenue\nfrom orders o join users u on o.user_id = u.id\nwhere o.status <> 'returned'\ngroup by u.city\norder by revenue desc" },
-  { id: "s2", dataset: "Sample", needs: ["orders.user_id", "users.city"], title: "Sample · top orders with a CTE", about: "A CTE, CASE and a top-N.", sql: "with big as (\n  select user_id, sum(amount) total from orders group by user_id\n)\nselect u.name, b.total,\n  case when b.total > 2000 then 'gold' when b.total > 1000 then 'silver' else 'bronze' end tier\nfrom big b join users u on u.id = b.user_id\norder by b.total desc\nlimit 10" },
-];
-
 export function newQuery(sql: string, name?: string): Query {
   const key = `q${S.nextQuery++}`;
   const q: Query = {
@@ -40,7 +35,7 @@ export function closeQuery(q: Query): void {
 }
 
 export function NewQueryTab() {
-  const examples = [...SAMPLE_QUERIES, ...(S.info?.examples ?? [])];
+  const examples: Json[] = S.info?.examples ?? [];
   const ex = examples.find((e) => e.id === S.draft.example);
   // The tables and columns the example needs: a table of the same name from another
   // dataset (SSB and TPC-DS both have customer) counts as missing.
@@ -88,14 +83,21 @@ export function NewQueryTab() {
 function open(): void {
   const sql = S.draft.sql.trim();
   if (!sql) return toast("Write a query first.");
-  const ex = [...SAMPLE_QUERIES, ...(S.info?.examples ?? [])].find((e) => e.id === S.draft.example && e.sql.trim() === sql);
+  const ex = (S.info?.examples ?? []).find((e: Json) => e.id === S.draft.example && e.sql.trim() === sql);
   newQuery(sql, ex ? ex.title.split(" · ")[0] : undefined);
 }
 
+/** The options a query compiles with: its engine, and that engine's settings. */
 function compileOptions(q: Query) {
   const o = q.options;
-  return { rules: o.rules, cluster: o.cluster, settings: { shufflePartitions: o.planner.shufflePartitions, joinStrategy: o.planner.joinStrategy, runtimeFilters: o.planner.runtimeFilters } };
+  const settings = o.engine === "spark"
+    ? { broadcastThreshold: o.spark.broadcastThreshold, shufflePartitions: o.spark.shufflePartitions, maxTaskFailures: o.spark.maxTaskFailures }
+    : { shufflePartitions: o.planner.shufflePartitions, joinStrategy: o.planner.joinStrategy, runtimeFilters: o.planner.runtimeFilters };
+  return { engine: o.engine, rules: o.rules, cluster: o.cluster, settings };
 }
+
+/** The tabs every engine has; the rest are an engine's own. */
+const SHARED_TABS: readonly SubTab[] = ["plan", "events", "trace", "result"];
 
 export async function compile(q: Query): Promise<void> {
   if (S.busy) return toast("Another operation is still running.");
@@ -114,6 +116,8 @@ export async function compile(q: Query): Promise<void> {
     q.error = null;
     q.planStep = null;
     if (q.sel?.kind !== "node") q.sel = null;
+    // another engine has other tabs: one of the old engine's is not there any more
+    if (!SHARED_TABS.includes(q.sub) && !viewsOf(r.state.engine).tabs.some((t) => t.key === q.sub)) q.sub = "plan";
   } catch (e) {
     q.error = (e as Error).message;
     q.plans = null;
@@ -127,7 +131,7 @@ export async function compile(q: Query): Promise<void> {
 }
 
 type Action = "step" | "next" | "wave" | "finish" | "run";
-const PENDING: Record<Action, string> = { step: "Running a step", next: "Running to the next split", wave: "Running a wave", finish: "Finishing the running pipelines", run: "Running to the end" };
+const PENDING: Record<Action, (unit: string) => string> = { step: () => "Running a step", next: (u) => `Running to the next ${u}`, wave: () => "Running a wave", finish: () => "Finishing the work running now", run: () => "Running to the end" };
 
 /** The last step; `q.at` is null when the views follow it. */
 const lastEvent = (q: Query) => q.events.length - 1;
@@ -138,7 +142,7 @@ async function act(q: Query, name: Action): Promise<void> {
   S.busy = true;
   noteAction(name);
   q.progress = name === "finish" || name === "run" ? { phase: "running" } : null;
-  q.pending = PENDING[name];
+  q.pending = PENDING[name](viewsOf(q.state?.engine ?? q.options.engine).unitNoun);
   update();
   try {
     const known = q.events.length;
@@ -181,7 +185,17 @@ function Controls({ q }: { q: Query }) {
   // Step and Next split also move through steps that already happened.
   const canStep = !!st && !stale && !S.busy && (q.at !== null || canRun);
   const set = (fn: () => void) => { fn(); update(); };
-  const parts = o.planner.shufflePartitions === "auto" ? 2 * o.cluster.nodes : o.planner.shufflePartitions;
+  const isSpark = o.engine === "spark";
+  // The views of the engine compiled (or, before that, of the engine chosen).
+  const v = viewsOf(st?.engine ?? o.engine);
+  const unit = v.unitNoun;
+  const auto = isSpark ? 2 * o.cluster.nodes * o.cluster.cores : 2 * o.cluster.nodes;
+  const parts = (isSpark ? o.spark.shufflePartitions : o.planner.shufflePartitions) === "auto" ? auto : (isSpark ? o.spark.shufflePartitions : o.planner.shufflePartitions);
+  const kb = (b: number) => (b < 0 ? "off" : b >= 1 << 30 ? `${b / (1 << 30)} GB` : b >= 1 << 20 ? `${b / (1 << 20)} MB` : `${b / 1024} KB`);
+  const machine = isSpark ? "node" : "worker";
+  const engineSummary = isSpark
+    ? `Spark-style · broadcast ≤ ${kb(o.spark.broadcastThreshold)}, ${parts} shuffle partitions`
+    : `kostka · ${o.planner.joinStrategy} joins, ${parts} partitions${o.planner.runtimeFilters ? ", runtime filters" : ""}`;
   const size = (mb: number) => (mb < 1 ? `${mb * 1024} KB` : mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`);
   const sel = (label: string, value: string | number, options: [string | number, string][], onChange: (v: string) => void) => (
     <label class="field">{label}
@@ -191,8 +205,17 @@ function Controls({ q }: { q: Query }) {
   return (
     <div class="stack">
       <details class="compile" data-tour="options">
-        <summary>Options · {o.rules.length} of {info.rules.length} rules · {o.planner.joinStrategy} joins, {parts} partitions{o.planner.runtimeFilters ? ", runtime filters" : ""} · {o.cluster.nodes} worker{o.cluster.nodes === 1 ? "" : "s"} × {size(o.cluster.memoryMB)} memory, {size(o.cluster.diskMB)} disk, {o.cluster.io} IO · {n(o.cluster.batchRows)}-row batches · {o.cluster.cpu === "measured" ? "measured" : "modelled"} CPU</summary>
+        <summary>Options · {engineSummary} · {o.rules.length} of {info.rules.length} rules · {o.cluster.nodes} {machine}{o.cluster.nodes === 1 ? "" : "s"} × {o.cluster.cores} core{o.cluster.cores === 1 ? "" : "s"}, {size(o.cluster.memoryMB)} memory, {size(o.cluster.diskMB)} disk, {o.cluster.io} IO · {n(o.cluster.batchRows)}-row batches · {o.cluster.cpu === "measured" ? "measured" : "modelled"} CPU</summary>
         <div class="ogroups">
+          <section class="ogroup" data-tour="engine">
+            <h4>Engine <span class="faint">who plans and runs the optimized plan</span></h4>
+            <div class="row">
+              {info.engines.map((e: Json) => (
+                <label class={`rule eng-pick ${o.engine === e.name ? "on" : ""}`} data-tour={`engine-${e.name}`}><input type="radio" name={`engine-${q.key}`} checked={o.engine === e.name} onChange={() => set(() => (o.engine = e.name))} /><span><b>{e.label}</b></span></label>
+              ))}
+              <span class="note grow">{isSpark ? "Spark's model: the plan is cut into stages at every shuffle; each stage runs as tasks, one per partition, in the task slots of executors (one per core). A stage starts when its parents are done." : "kostka's model: the plan is cut into pipelines joined by output buffers; every worker can run a split of any pipeline, one at a time."} The choice applies when you compile.</span>
+            </div>
+          </section>
           <section class="ogroup" data-tour="rules">
             <h4>1 · Optimizer rules <span class="faint">the logical plan</span></h4>
             <div class="row">
@@ -208,6 +231,20 @@ function Controls({ q }: { q: Query }) {
               ))}
             </div>
           </section>
+          {isSpark ? (
+          <section class="ogroup" data-tour="spark-settings">
+            <h4>2 · Spark-style planner <span class="faint">the plan → stages and tasks</span></h4>
+            <p class="note">Spark's settings. The plan, and so its stages, depends on them and on the cluster.</p>
+            <div class="rules">
+              <div class="rule" data-tour="broadcast-threshold"><span><b>broadcast threshold</b><span class="doc">A join whose build side is estimated at most this big (rows × row width) is a BroadcastHashJoin: every executor gets the whole build side. Bigger ones are SortMergeJoins: both sides are shuffled by the join keys and sorted. Like Spark's autoBroadcastJoinThreshold (10 MB in Spark, scaled down to these small nodes).</span>
+                {sel("", o.spark.broadcastThreshold, [[-1, "off (never broadcast)"], [8 * 1024, "8 KB"], [32 * 1024, "32 KB (default)"], [128 * 1024, "128 KB"], [1 << 20, "1 MB"], [1 << 30, "1 GB (always)"]], (x) => set(() => (o.spark.broadcastThreshold = Number(x))))}</span></div>
+              <div class="rule"><span><b>shuffle partitions</b><span class="doc">The tasks of a stage that reads a shuffle (spark.sql.shuffle.partitions). Auto is 2 per core in the cluster.</span>
+                {sel("", o.spark.shufflePartitions, [["auto", `auto (nodes × cores × 2 = ${2 * o.cluster.nodes * o.cluster.cores})`], ...[1, 2, 4, 8, 16, 32].map((m) => [m, String(m)] as [number, string])], (x) => set(() => (o.spark.shufflePartitions = x === "auto" ? "auto" : Number(x))))}</span></div>
+              <div class="rule"><span><b>max task failures</b><span class="doc">How many attempts a task gets before the query fails (spark.task.maxFailures). A task lost with its node does not count.</span>
+                {sel("", o.spark.maxTaskFailures, [1, 2, 4, 8].map((m) => [m, String(m)] as [number, string]), (x) => set(() => (o.spark.maxTaskFailures = Number(x))))}</span></div>
+            </div>
+          </section>
+          ) : (
           <section class="ogroup" data-tour="planner">
             <h4>2 · Physical planner <span class="faint">the plan → pipelines</span></h4>
             <p class="note">Cuts the optimized plan into pipelines and decides how rows move between workers. These choices depend on the cluster.</p>
@@ -220,19 +257,23 @@ function Controls({ q }: { q: Query }) {
                 <span><b>runtime filters</b><span class="doc">When a hash join's build pipeline is done, its keys skip probe-side files whose statistics miss them, and drop probe rows that cannot match right after the scan.</span></span></label>
             </div>
           </section>
+          )}
           <section class="ogroup" data-tour="cluster">
             <h4>3 · Cluster <span class="faint">the machines</span></h4>
-            <p class="note">Output waiting for the next pipeline spills to disk when memory runs short; a full disk fails the query, and so does a hash table or aggregate that doesn't fit in memory.</p>
+            <p class="note">{isSpark
+              ? "One executor per node, with a task slot per core. Each running task gets memory / cores: a Sort that outgrows it spills to disk, a hash aggregate fails the task. Shuffle files go to the node's disk; a full disk fails the task."
+              : "Output waiting for the next pipeline spills to disk when memory runs short; a full disk fails the query, and so does a hash table or aggregate that doesn't fit in memory. kostka runs one split at a time per worker, on core 0."}</p>
             <div class="row">
-              {sel("Workers", o.cluster.nodes, info.cluster.nodes.map((w: number) => [w, String(w)]), (v) => set(() => (o.cluster.nodes = Number(v))))}
-              {sel("Memory per worker", o.cluster.memoryMB, info.cluster.memory.map((m: number) => [m, size(m)]), (v) => set(() => (o.cluster.memoryMB = Number(v))))}
-              {sel("Disk per worker", o.cluster.diskMB, info.cluster.disk.map((m: number) => [m, size(m)]), (v) => set(() => (o.cluster.diskMB = Number(v))))}
+              {sel(isSpark ? "Nodes" : "Workers", o.cluster.nodes, info.cluster.nodes.map((w: number) => [w, String(w)]), (v) => set(() => (o.cluster.nodes = Number(v))))}
+              <span data-tour="cores">{sel("Cores per node", o.cluster.cores, [1, 2, 4, 8].map((c) => [c, String(c)] as [number, string]), (v) => set(() => (o.cluster.cores = Number(v))))}</span>
+              {sel(`Memory per ${machine}`, o.cluster.memoryMB, info.cluster.memory.map((m: number) => [m, size(m)]), (v) => set(() => (o.cluster.memoryMB = Number(v))))}
+              {sel(`Disk per ${machine}`, o.cluster.diskMB, info.cluster.disk.map((m: number) => [m, size(m)]), (v) => set(() => (o.cluster.diskMB = Number(v))))}
               {sel("IO speeds", o.cluster.io, info.cluster.io.map((p: Json) => [p.name, p.label]), (v) => set(() => (o.cluster.io = v)))}
             </div>
           </section>
           <section class="ogroup" data-tour="flow">
             <h4>4 · Data flow <span class="faint">how work is cut up</span></h4>
-            <p class="note">A data file is one split; a buffer split is up to the split size of outputs, cut by the coordinator (an aggregate's merge reads whole partitions). Operators pass rows on in batches.</p>
+            <p class="note">{isSpark ? "A data file is one task of a scan stage; operators pass rows on in batches. (Split size is kostka's.)" : "A data file is one split; a buffer split is up to the split size of outputs, cut by the coordinator (an aggregate's merge reads whole partitions). Operators pass rows on in batches."}</p>
             <div class="row">
               {sel("Batch size", o.cluster.batchRows, info.cluster.batches.map((m: number) => [m, `${n(m)} rows`]), (v) => set(() => (o.cluster.batchRows = Number(v))))}
               {sel("Split size", o.cluster.splitRows, [256, 1024, 4096, 16384, 65536, 1048576].map((m) => [m, `${n(m)} rows`]), (v) => set(() => (o.cluster.splitRows = Number(v))))}
@@ -250,16 +291,16 @@ function Controls({ q }: { q: Query }) {
       <div class="controls">
         <button class="btn primary" data-tour="compile" disabled={S.busy} onClick={() => compile(q)}>{q.plans ? "Recompile" : "Compile"}</button>
         <button class="btn" data-tour="step" disabled={!canStep} title="Goes to the next step, running the simulation if it has not happened yet" onClick={() => act(q, "step")}>Step</button>
-        <button class="btn" data-tour="next" disabled={!canStep} title="Goes to the next step where a worker processed a split" onClick={() => act(q, "next")}>Next split</button>
-        <button class="btn" data-tour="wave" disabled={!canRun} title="Runs until each worker that can ran one split" onClick={() => act(q, "wave")}>Wave</button>
-        <button class="btn" data-tour="finish" disabled={!canRun} title="Runs until the pipelines running now are done" onClick={() => act(q, "finish")}>Finish {st ? viewsOf(st.engine).running(st) : ""}</button>
+        <button class="btn" data-tour="next" disabled={!canStep} title={`Goes to the next step where a ${v.nodeNoun} ran a ${unit}`} onClick={() => act(q, "next")}>Next {unit}</button>
+        <button class="btn" data-tour="wave" disabled={!canRun} title={`Runs until each ${v.nodeNoun} (each core, for tasks) that can ran one ${unit}`} onClick={() => act(q, "wave")}>Wave</button>
+        <button class="btn" data-tour="finish" disabled={!canRun} title="Runs until the work running now is done" onClick={() => act(q, "finish")}>Finish {st ? v.running(st) : ""}</button>
         <button class="btn" data-tour="run" disabled={!canRun} onClick={() => act(q, "run")}>Run to the end</button>
         <span class="grow" />
         {q.pending && <Spinner>{q.pending}…</Spinner>}
         {stale && <span class="chip warn">edited: recompile to apply</span>}
         {st && <span class="note">{st.done ? <span class="chip ok">done</span> : st.error ? <span class="chip bad">failed</span> : <span class="chip run">step {n(lastEvent(q))}</span>} {ms(st.elapsed_ms)} simulated</span>}
       </div>
-      {q.progress && <div class="stack" style="gap:4px"><ProgressBar done={q.progress.done ?? 0} total={q.progress.total ?? 1} /><span class="note">{q.progress.phase} · {n(q.progress.done ?? 0)} of {n(q.progress.total ?? 0)} splits done</span></div>}
+      {q.progress && <div class="stack" style="gap:4px"><ProgressBar done={q.progress.done ?? 0} total={q.progress.total ?? 1} /><span class="note">{q.progress.phase} · {n(q.progress.done ?? 0)} of {n(q.progress.total ?? 0)} {unit}s done</span></div>}
       {q.events.length > 1 && (
         <div class="hist" data-tour="history">
           <div class="row">
@@ -271,7 +312,7 @@ function Controls({ q }: { q: Query }) {
           <span class="note">{q.at === null ? `latest: step ${n(lastEvent(q))}` : `step ${n(q.at)} of ${n(lastEvent(q))}: the views show the query as it was then`}</span>
         </div>
       )}
-      <p class="note"><b>Compile</b> analyzes the SQL, runs the chosen rules and plans the pipelines, pinned to the tables' current versions. <b>Step</b> goes to the next step: the coordinator making a pipeline's splits, assigning splits, handling a SplitDone or a worker gone; a worker processing a split; a pipeline done. It runs the simulation when that step has not happened yet. <b>Next split</b> goes on to the next split processed. <b>Wave</b> runs until each worker ran one split. <b>Finish</b> runs until the pipelines running now are done. Every step, with its messages, stays in the history.</p>
+      {v.controlsNote}
     </div>
   );
 }
@@ -282,10 +323,12 @@ export function QueryTab({ q }: { q: Query }) {
   // the shared tabs, with the engine's own after Plan
   const tabs: [SubTab, string][] = [["plan", "Plan"], ...(views?.tabs ?? []).map((t): [SubTab, string] => [t.key, t.label]), ["events", "Steps"], ["trace", "Trace"], ["result", "Result"]];
   const own = views?.tabs.find((t) => t.key === q.sub);
+  const engine = state?.engine ?? q.options.engine;
+  const label = S.info?.engines.find((e: Json) => e.name === engine)?.label ?? engine;
   return (
-    <div class="stack">
+    <div class={`stack eng-${engine}`}>
       <section class="panel stack" data-tour="query">
-        <h2>{q.name}</h2>
+        <div class="row"><h2 class="grow">{q.name}</h2><span class="chip eng-chip" data-tour="engine-label" title="The engine this query runs on: choose it in Options">{engine === "spark" ? "Spark-style engine" : label}</span></div>
         <Editor doc={q.sql} catalog={S.catalog} check={check} onChange={(t) => { const was = q.compiledSql !== null && q.compiledSql !== q.sql; q.sql = t; if (was !== (q.compiledSql !== null && q.compiledSql !== q.sql)) update(); }} onRun={() => compile(q)} />
         {q.error && <div class="error">{q.error}</div>}
         {S.info && <Controls q={q} />}

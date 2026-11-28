@@ -6,7 +6,7 @@ import { compileExpr, type Evaluator } from "../../../../core/compile.ts";
 import type { Expr, Field } from "../../../../core/expr.ts";
 import { partitionOf } from "../../../../core/hash.ts";
 import type { Row, Value } from "../../../../core/types.ts";
-import { Batch, checkColumns } from "../batch.ts";
+import { Batch, checkColumns } from "../../../../core/batch.ts";
 import type { Charged, ExecContext } from "../context.ts";
 import { COST } from "../../../../core/cost.ts";
 import type { OutputBuffer, PieceRef } from "../buffer.ts";

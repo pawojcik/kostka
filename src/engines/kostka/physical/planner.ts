@@ -22,13 +22,13 @@
 // For a new logical node, register a function that compiles it: `registerPlanner`.
 
 import { internal } from "../../../core/errors.ts";
-import { Alias, ColumnRef, Field, conjuncts, isCall, refIds, subsetOf, type AggCall, type Expr } from "../../../core/expr.ts";
-import { andAll } from "../../../core/functions/index.ts";
+import { Alias, ColumnRef, Field, type AggCall, type Expr } from "../../../core/expr.ts";
 import { Estimator } from "../../../sql/optimizer/cardinality.ts";
-import { Aggregate, Filter, Join, Limit, Project, Scan, Sort, TopN, idsOf, type PlanNode } from "../../../sql/plan.ts";
+import { Aggregate, Filter, Join, Limit, Project, Scan, Sort, TopN, idsOf, splitJoinCondition, type PlanNode } from "../../../sql/plan.ts";
 import { OutputBuffer, type BufferMode } from "./buffer.ts";
 import type { Operator, PhysicalOperator, Sink, Source } from "./operator.ts";
-import { AggLayout, MergeAggregateSource, PartialAggregateSink } from "./operators/aggregate.ts";
+import { AggLayout } from "../../../core/accumulators.ts";
+import { MergeAggregateSource, PartialAggregateSink } from "./operators/aggregate.ts";
 import { BufferSink, BufferSource, ResultSink } from "./operators/buffer-ops.ts";
 import { HashProbeOp } from "./operators/join.ts";
 import { RuntimeFilter } from "./operators/runtime-filter.ts";
@@ -266,30 +266,3 @@ function scanColumn(node: PlanNode, id: number): { scan: Scan; column: string; s
     } else return null;
   }
 }
-
-/** Splits a join condition into hash keys and a residual: each top-level `l = r`
- * conjunct with one side on each input becomes a key pair. */
-export function splitJoinCondition(cond: Expr | null, leftIds: Set<number>, rightIds: Set<number>) {
-  const leftKeys: Expr[] = [], rightKeys: Expr[] = [], rest: Expr[] = [];
-  if (!cond) return { leftKeys, rightKeys, residual: null };
-  const side = (e: Expr) => {
-    const ids = refIds(e);
-    if (ids.size && subsetOf(ids, leftIds)) return "left";
-    if (ids.size && subsetOf(ids, rightIds)) return "right";
-    return null;
-  };
-  for (const c of conjuncts(cond)) {
-    if (isCall(c, "=")) {
-      const [a, b] = c.args as [Expr, Expr];
-      const sa = side(a), sb = side(b);
-      if (sa && sb && sa !== sb) {
-        leftKeys.push(sa === "left" ? a : b);
-        rightKeys.push(sa === "left" ? b : a);
-        continue;
-      }
-    }
-    rest.push(c);
-  }
-  return { leftKeys, rightKeys, residual: andAll(rest) };
-}
-

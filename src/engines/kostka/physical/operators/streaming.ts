@@ -3,7 +3,7 @@
 import { compileExpr, compilePredicate, type Evaluator } from "../../../../core/compile.ts";
 import type { Expr, Field } from "../../../../core/expr.ts";
 import type { Row } from "../../../../core/types.ts";
-import { checkColumns, type Batch } from "../batch.ts";
+import { checkColumns, type Batch } from "../../../../core/batch.ts";
 import type { Charged, ExecContext } from "../context.ts";
 import { COST, exprCost } from "../../../../core/cost.ts";
 import { Operator, emit, type OperatorInstance } from "../operator.ts";

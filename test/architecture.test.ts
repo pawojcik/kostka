@@ -3,7 +3,10 @@
 // layers know engines only through execution/engine.ts; a Database is given its
 // engines by whoever makes it (src/node.ts, the workbench's worker). Also: storage
 // does not import sql (a layer below it), and kostka's domain does not import the
-// cluster (infrastructure): only its adapters, sim.ts and unit-context.ts, do.
+// cluster (infrastructure): only its adapters, sim.ts and unit-context.ts, do. The
+// two engines never import each other, and the Spark-style engine's domain (physical/,
+// driver/, executor/) does not import the cluster either: only its sim.ts does (ADR
+// 0002, criterion 10).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readdirSync, readFileSync } from "node:fs";
@@ -55,4 +58,15 @@ test("kostka's domain does not import the cluster", () => {
 test("the check sees an import of an engine", () => {
   const f = join(src, "node.ts");
   assert.ok(imports(f).some((i) => i.startsWith(join(src, "engines"))), "src/node.ts imports src/engines/index.ts");
+});
+
+test("the engines do not import each other", () => {
+  assert.deepEqual(crossings(["engines/spark"], "engines/kostka"), []);
+  assert.deepEqual(crossings(["engines/kostka"], "engines/spark"), []);
+  assert.ok(crossings(["engines/spark"], "core").length > 0, "the check sees the Spark-style engine's imports");
+});
+
+test("the Spark-style engine's domain does not import the cluster", () => {
+  assert.deepEqual(crossings(["engines/spark/physical", "engines/spark/driver", "engines/spark/executor"], "cluster"), []);
+  assert.ok(crossings(["engines/spark"], "cluster").length > 0, "its adapter does: the check sees it");
 });

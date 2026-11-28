@@ -24,6 +24,7 @@ import type { CsvColumn, CsvOptions } from "../loaders/csv.ts";
 import { QUERIES } from "../loaders/tpcds/queries.ts";
 import { QUERIES as SSB_QUERIES } from "../loaders/ssb/queries.ts";
 import { QUERIES as TAXI_QUERIES } from "../loaders/taxi/queries.ts";
+import { QUERIES as SAMPLE_QUERIES } from "../loaders/sample/queries.ts";
 import { FILES as TAXI_FILES } from "../loaders/taxi/load.ts";
 import { SCALES } from "../loaders/tpcds/generate.ts";
 import type { WriteMode } from "../storage/writer.ts";
@@ -97,6 +98,7 @@ export class Session {
       generatorKinds: GENERATOR_KINDS,
       tpcdsScales: SCALES,
       examples: [
+        ...SAMPLE_QUERIES.map(({ id, title, about, sql }) => ({ id, title, about, sql, needs: ["orders.user_id", "users.city"], dataset: "Sample" })),
         ...TAXI_QUERIES.map(({ id, title, about, sql }) => ({ id, title, about, sql, needs: ["trips.pickup_time", "zones.zone_id"], dataset: "NYC taxi" })),
         ...SSB_QUERIES.map(({ id, title, about, sql }) => ({ id, title, about, sql, needs: ["lineorder.lo_orderdate", "customer.c_region"], dataset: "SSB" })),
         ...QUERIES.map(({ id, title, about, sql }) => ({ id, title, about, sql, needs: ["store_sales.ss_sold_date_sk", "customer.c_customer_sk"], dataset: "TPC-DS" })),

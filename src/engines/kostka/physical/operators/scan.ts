@@ -9,7 +9,7 @@ import { decodeParquet } from "../../../../storage/parquet.ts";
 import type { TableReader } from "../../../../storage/table-reader.ts";
 import type { DataFile } from "../../../../catalog/meta.ts";
 import type { Scan, ScanInfo } from "../../../../sql/plan.ts";
-import { Batch } from "../batch.ts";
+import { Batch } from "../../../../core/batch.ts";
 import type { Charged, ExecContext } from "../context.ts";
 import { COST } from "../../../../core/cost.ts";
 import type { FileSplit, Split } from "../buffer.ts";

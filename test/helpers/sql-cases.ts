@@ -60,3 +60,12 @@ export const CONFIGS = [
   { cluster: { workers: 4, batchRows: 8, splitRows: 10 }, planner: { joinStrategy: "shuffle" as const, shufflePartitions: 5 } },
   { cluster: { workers: 2 }, rules: [] as string[] },
 ];
+
+/** The configurations every query runs on with the Spark-style engine (ADR 0002,
+ * criterion 1): 1, 3 and 4 nodes; 1 and 2 cores; no broadcasts (-1) and every join
+ * that can be broadcast (1 GB). Small batches on the larger clusters. */
+export const SPARK_CONFIGS = [1, 3, 4].flatMap((nodes) => [1, 2].flatMap((cores) => [-1, 1 << 30].map((broadcastThreshold) => ({
+  engine: "spark",
+  cluster: { nodes, cores, ...(nodes > 1 ? { batchRows: 16 } : {}) },
+  settings: { broadcastThreshold, ...(nodes === 4 ? { shufflePartitions: 5 } : {}) },
+}))));

@@ -1,9 +1,10 @@
-// A batch: rows with their column list. The columns are Fields with expression ids,
-// so an operator can check that it received the layout it was compiled for.
+// A batch: rows with their column list, the unit operators pass rows on in. The
+// columns are Fields with expression ids, so an operator can check that it received
+// the layout it was compiled for. Every engine's operators use it.
 
-import { internal } from "../../../core/errors.ts";
-import type { Field } from "../../../core/expr.ts";
-import type { Row } from "../../../core/types.ts";
+import { internal } from "./errors.ts";
+import type { Field } from "./expr.ts";
+import type { Row } from "./types.ts";
 
 export class Batch {
   readonly columns: readonly Field[];

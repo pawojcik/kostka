@@ -29,10 +29,12 @@ interface Scenario {
   id: string;
   title: string;
   summary: string;
-  dataset: "taxi" | "ssb";
+  dataset: "taxi" | "ssb" | "sample";
   example: string;
   name: string;
   workers: number;
+  /** The engine its queries run on (default: kostka, whose views kostka's tutorials show). */
+  engine?: string;
   steps: Step[];
 }
 
@@ -65,6 +67,21 @@ const gone = (t: Run): number[] => (latest(t)?.nodes ?? []).filter((m: Json) => 
 const upWorkers = (t: Run): number[] => (latest(t)?.nodes ?? []).filter((m: Json) => m.status !== "gone").map((m: Json) => m.worker);
 
 const B = ({ children }: { children: ComponentChildren }) => <b>{children}</b>;
+
+/** Opens an example in a new query tab, on the scenario's engine and cluster: the
+ * query the steps after it are about. */
+function openExample(t: Run, example: string, name: string): void {
+  const ex = (S.info?.examples ?? []).find((e: Json) => e.id === example);
+  if (!ex) return;
+  const q = newQuery(ex.sql, name);
+  q.options.cluster.nodes = t.scenario.workers;
+  q.options.engine = t.scenario.engine ?? "kostka";
+  t.q = q;
+}
+
+const stagesOf = (t: Run): Json[] => latest(t)?.stages ?? [];
+const sparkOp = (t: Run, name: string) => (latest(t)?.ops ?? []).some((o: Json) => o.name === name);
+const finalStage = (t: Run): Json | undefined => stagesOf(t).at(-1);
 
 // Every step asks for at most one action; a step that asks for one is followed by a
 // step that points at what the action did.
@@ -228,6 +245,48 @@ const SCENARIOS: Scenario[] = [
       see("The difference", "result", (t) => <>With every rule: {ms(t.memo.full ?? 0)}. Without projection_pushdown: {ms(latest(t)?.elapsed_ms ?? 0)}. The lineorder scan read all 17 columns instead of 6, and every buffer carried the extra columns. On bigger tables, or with slower IO speeds, the gap grows. Turn the rule back on, and try the others.</>),
     ],
   },
+  {
+    id: "spark",
+    title: "Spark-style: stages, shuffles and slots",
+    summary: "The same queries on a Spark-style engine: stages cut at every shuffle, a broadcast threshold in bytes, tasks side by side in the slots of each core, and FetchFailed when a node with shuffle files is gone.",
+    dataset: "sample", example: "s1", name: "Revenue per city", workers: 2, engine: "spark",
+    steps: [
+      see("Another engine", "engine-label", () => <>This query adds up revenue per city over the users/orders sample. It runs on the <B>Spark-style engine</B>: the same optimized plan, planned and run the way Spark does it. The Engine choice is at the top of Options; the tutorial chose it for you, and its views use Spark's orange.</>),
+      compile("Compile it", () => <>Compiling plans the Spark plan and cuts it into jobs and stages.</>),
+      openTab("spark-plan", "Plan by stage", () => <>The plan, as Spark would show it.</>),
+      see("Stages", "spark-plan", () => <>Each card is a <B>stage</B>: operators that run in one task per partition (the dashed WholeStageCodegen box). The plan is cut wherever rows must move: at each <B>Exchange</B>. The users build side is estimated at about 63 KB, more than the 32 KB broadcast threshold, so the join is a <B>SortMergeJoin</B>: stages 0 and 1 scan orders and users and write shuffle files by user id, and stage 2 reads one partition of both, sorts them and merges. Click the SortMergeJoin to see why it was chosen.</>),
+      act("Run a wave", "wave", "Click Wave.", (t) => since(t, "wave") >= 1, () => <>A wave runs until each core that can has run one task.</>),
+      see("Barriers", "timeline", () => <>The scans of stage 0 and 1 run first. Stage 2 cannot start until <B>every</B> task of both is done: stages are barriers, and shuffle files are written to disk between them.</>),
+      runToEnd(() => <>Let it finish.</>),
+      openTab("spark-jobs", "Jobs · Stages · Tasks", () => <>Spark's own pages.</>),
+      see("Jobs, stages and tasks", "spark-stages", () => <>One job, cut into stages. Each stage shows its tasks, the bytes it read from storage, and the shuffle bytes it read and wrote. Click a stage to see its tasks below: their partition, executor and slot.</>),
+      { ...openOptions, enter: (t) => { t.memo.shuffled = latest(t)?.elapsed_ms ?? 0; } },
+      act("Raise the threshold", "broadcast-threshold", "Set the broadcast threshold to 128 KB.", (t) => (t.q?.options.spark.broadcastThreshold ?? 0) >= 128 * 1024,
+        () => <>The threshold is a fixed number of bytes, like Spark's autoBroadcastJoinThreshold. Raise it above the users side's 63 KB.</>),
+      compile("Compile with it"),
+      openTab("spark-plan", "Plan by stage"),
+      see("Now it broadcasts", "spark-plan", (t) => <>{sparkOp(t, "BroadcastHashJoin") ? <>The join is a <B>BroadcastHashJoin</B> now. Users are collected by a job of their own (job 0), and every executor fetches them once and builds one hash table, which all its tasks share. Orders are not shuffled for the join any more.</> : <>The join should be a BroadcastHashJoin now: check that the threshold is 128 KB and recompile.</>}</>),
+      { ...see("A smaller build side", "query", () => <>A new tab: <B>orders from one city</B> joins orders only with the users of Gdansk, about 7 KB, so it broadcasts even at the default 32 KB threshold. Compare kostka, which decides from row counts and the number of workers, not from a size in bytes.</>), enter: (t) => openExample(t, "s3", "Orders from one city") },
+      openOptions,
+      act("Two cores per node", "cores", "Set Cores per node to 2.", (t) => t.q?.options.cluster.cores === 2,
+        () => <>Each executor has one <B>task slot</B> per core.</>),
+      compile("Compile it"),
+      openTab("spark-plan", "Plan by stage"),
+      see("Broadcast by default", "spark-plan", (t) => <>{sparkOp(t, "BroadcastHashJoin") ? <>A <B>BroadcastHashJoin</B> at the default 32 KB: job 0 collects the users of Gdansk, and job 1 scans orders, probes them and adds up. One stage fewer than with a shuffle.</> : <>Check that the broadcast threshold is 32 KB and recompile: this join should be a BroadcastHashJoin.</>}</>),
+      runToEnd(),
+      openTab("spark-executors", "Executors"),
+      see("Side by side", "timeline", () => <>Each node now has two lanes, one per core: slot 0 runs on core 0, slot 1 on core 1, so two tasks run side by side. They share the node's IO channel: the hatched parts are a task waiting for the other's reads. More cores speed up CPU work more than IO. Each running task also gets half the node's memory.</>),
+      compile("Start over", () => <>Now a failure, in the last stage.</>),
+      act("Up to the last stage", "finish", "Click Finish until the last stage is running.", (t) => finalStage(t)?.status === "running" && t.q?.at === null,
+        (t) => <>The last stage reads the shuffle files the stage before it wrote, on both nodes. Finish runs until the stages running now are done; the next ones are submitted right then. The last stage is {finalStage(t)?.status ?? "waiting"}.</>),
+      act("Stop a node", "stop-1", "Press Stop on executor 1.", (t) => gone(t).length > 0,
+        () => <>Stop is a failure: node 1 is gone with its executor, its running tasks and the shuffle files on its disk. It is not replaced.</>),
+      runToEnd(() => <>Let the other node finish.</>),
+      openTab("events", "Steps", () => <>What happened?</>),
+      see("FetchFailed", "events", (t) => <>{t.q?.events.some((e: Json) => e.kind === "FetchFailed") ? <>Find <B>FetchFailed</B> in the list: a task of the last stage could not read a shuffle file that was on node 1. That stage attempt failed; the driver resubmitted the stage before it (<B>StageResubmitted</B>, attempt 1) for the lost partitions only, and then the last stage again.</> : <>The last stage's tasks had read their shuffle files before node 1 was gone, so no fetch failed this time: find <B>StageResubmitted</B> instead, or start over and stop the node right after the last stage is submitted.</>} The result is the same; it came later.</>),
+      see("That's Spark's model", undefined, () => <>Stages and barriers instead of pipelines, shuffle files on disk instead of output buffers in memory, a broadcast threshold in bytes instead of kostka's rule, and stage resubmission instead of kostka's recovery from lineage. Choose kostka in Options and recompile to see kostka's views of the same query.</>),
+    ],
+  },
 ];
 
 // --- running a scenario ----------------------------------------------------------------
@@ -267,19 +326,17 @@ async function start(sc: Scenario): Promise<void> {
     if (!loaded(sc.example)) {
       if (S.busy) throw new Error("Another operation is still running; try again when it's done.");
       S.busy = true;
-      t.preparing = sc.dataset === "taxi" ? "Loading the NYC taxi tables…" : "Generating the SSB tables (scale 0.01)…";
+      t.preparing = sc.dataset === "taxi" ? "Loading the NYC taxi tables…" : sc.dataset === "sample" ? "Generating the users/orders sample…" : "Generating the SSB tables (scale 0.01)…";
       update();
       try {
-        await (sc.dataset === "taxi" ? call("loadTaxi", null) : call("loadSsb", 0.01));
+        await (sc.dataset === "taxi" ? call("loadTaxi", null) : sc.dataset === "sample" ? call("loadSample") : call("loadSsb", 0.01));
       } finally {
         S.busy = false;
       }
       await refreshTables();
     }
-    const ex = (S.info?.examples ?? []).find((e: Json) => e.id === sc.example);
-    const q = newQuery(ex.sql, sc.name);
-    q.options.cluster.nodes = sc.workers;
-    t.q = q;
+    // kostka's tutorials run on kostka; the Spark-style one on its engine
+    openExample(t, sc.example, sc.name);
     t.preparing = null;
     enterStep(t);
   } catch (e) {
@@ -311,7 +368,7 @@ function Picker() {
         <div class="tour-cards">
           {SCENARIOS.map((sc, i) => (
             <button class="tour-card" onClick={() => void start(sc)}>
-              <span class="faint">{i + 1} · {sc.dataset === "taxi" ? "NYC taxi" : "SSB"} · {sc.workers} workers · {sc.steps.length} steps</span>
+              <span class="faint">{i + 1} · {sc.dataset === "taxi" ? "NYC taxi" : sc.dataset === "sample" ? "Sample" : "SSB"} · {sc.workers} {sc.engine === "spark" ? "nodes, Spark-style" : "workers"} · {sc.steps.length} steps</span>
               <b>{sc.title}</b>
               <span class="note">{sc.summary}</span>
             </button>

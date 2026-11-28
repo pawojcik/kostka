@@ -36,3 +36,6 @@ export function exprCost(e: { children(): readonly unknown[] }): number {
   for (const c of e.children()) n += exprCost(c as typeof e);
   return n * COST.exprNode;
 }
+
+/** Sorting `n` rows: n log2 n comparisons. */
+export const sortCost = (n: number): number => (n > 1 ? n * Math.log2(n) * COST.sortCompare : 0);

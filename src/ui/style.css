@@ -604,3 +604,36 @@ button.btn.danger { color: var(--bad); }
 .op .role.row { gap: 4px; align-items: center; }
 .heavylist h4 { gap: 6px; align-items: center; }
 .heavylist tr.on td { background: var(--accent-bg); }
+/* The Spark-style engine: its own accent color (Spark's orange) everywhere in a query
+   tab that runs on it, so it is plain which engine ran. */
+.eng-spark { --accent: #d4581a; --accent-bg: #fcebe0; --accent-ink: #9a3c0b; }
+@media (prefers-color-scheme: dark) {
+  .eng-spark { --accent: #f08a4b; --accent-bg: #3a2416; --accent-ink: #ffc29b; }
+}
+.eng-chip { background: var(--accent-bg); color: var(--accent-ink); }
+.eng-pick { border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+.eng-pick.on { border-color: var(--accent); background: var(--accent-bg); }
+/* Plan by stage: columns of stage cards, data flowing left to right */
+.sdag { display: flex; gap: 14px; overflow-x: auto; align-items: flex-start; padding-bottom: 6px; }
+.scol { display: flex; flex-direction: column; gap: 12px; min-width: 260px; max-width: 420px; flex: 1 0 260px; }
+.scard { border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; background: var(--surface); display: flex; flex-direction: column; gap: 4px; cursor: pointer; }
+.scard:hover { border-color: var(--accent); }
+.scard.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.wscg { border: 1px dashed var(--accent); border-radius: 6px; padding: 14px 4px 4px; position: relative; font-family: var(--mono); font-size: 11.5px; }
+.wscg-l { position: absolute; top: 1px; left: 6px; font-size: 10px; color: var(--accent-ink); letter-spacing: .03em; }
+.sop { padding: 2px 6px; border-radius: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sop:hover, .sop.sel { background: var(--accent-bg); }
+.sop .rows { float: right; color: var(--accent-ink); font-size: 10.5px; margin-left: 6px; }
+.sopinfo { white-space: normal; font-family: var(--font); padding: 2px 6px 4px; }
+.sedge { font-size: 11.5px; color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sedge.out { color: var(--accent-ink); }
+table.data tr.click { cursor: pointer; }
+table.data tr.click:hover td, table.data tr.on td { background: var(--accent-bg); }
+td.small { font-size: 11px; }
+/* an executor's task slots */
+.slots { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.slot { font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px dashed var(--line-strong); color: var(--faint); }
+.slot.busy { border-style: solid; color: #fff; }
+.k-shuffle { background-image: repeating-linear-gradient(-45deg, rgba(255, 255, 255, .5) 0 2px, transparent 2px 5px); }
+.k-broadcast { background-image: repeating-linear-gradient(45deg, rgba(255, 255, 255, .5) 0 2px, transparent 2px 5px); }
+.k-spill { background-image: repeating-linear-gradient(0deg, rgba(255, 255, 255, .5) 0 1px, transparent 1px 4px); }

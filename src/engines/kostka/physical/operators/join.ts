@@ -17,54 +17,14 @@
 
 import { compileExpr, compilePredicate, type Evaluator } from "../../../../core/compile.ts";
 import type { Expr, Field } from "../../../../core/expr.ts";
-import { tupleKey, type Row, type Value } from "../../../../core/types.ts";
+import type { Row, Value } from "../../../../core/types.ts";
+import { HashTable, keyOf } from "../../../../core/hash-table.ts";
 import type { JoinType } from "../../../../sql/plan.ts";
-import { checkColumns } from "../batch.ts";
+import { checkColumns } from "../../../../core/batch.ts";
 import type { Charged, ExecContext } from "../context.ts";
 import { COST } from "../../../../core/cost.ts";
 import type { OutputBuffer } from "../buffer.ts";
-import { ENTRY_OVERHEAD, perRowBytes } from "../../../../core/rows.ts";
 import { Operator, emit, type OperatorInstance, type WholeInput } from "../operator.ts";
-
-export class HashTable {
-  readonly buckets = new Map<Value, Row[]>();
-  rows = 0;
-  nullKeys = 0;
-  bytes = 0;
-  private perRow = 0;
-
-  add(rows: readonly Row[], keys: readonly Evaluator[]): void {
-    for (const row of rows) {
-      const k = keyOf(row, keys);
-      if (k === undefined) {
-        this.nullKeys++;
-        continue;
-      }
-      const b = this.buckets.get(k);
-      if (b) b.push(row);
-      else this.buckets.set(k, [row]);
-      this.rows++;
-    }
-    if (rows.length && !this.perRow) this.perRow = perRowBytes(rows);
-    this.bytes = Math.round(this.rows * this.perRow + this.buckets.size * ENTRY_OVERHEAD);
-  }
-}
-
-/** The key of a row, or undefined if any key value is null (it never matches). */
-export function keyOf(row: Row, keys: readonly Evaluator[]): Value | undefined {
-  if (keys.length === 0) return 0; // no equality keys: one bucket
-  if (keys.length === 1) {
-    const v = keys[0]!(row);
-    return v === null ? undefined : v;
-  }
-  const vs: Value[] = [];
-  for (const k of keys) {
-    const v = k(row);
-    if (v === null) return undefined;
-    vs.push(v);
-  }
-  return tupleKey(vs);
-}
 
 export interface TableInfo {
   where: string;

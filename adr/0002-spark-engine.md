@@ -400,3 +400,51 @@ Tasks are units on cores (a slot's core), timed by `cluster/node.ts`:
 ## Open questions
 
 None.
+
+## Corrections
+
+### 2026-11-28: row widths, shuffle files on disk, and when FetchFailed shows
+
+- **Assumed:** the estimated build bytes are `Estimator.rows` times "the row width
+  from `cluster/rows.ts`", the same estimate kostka's cost model uses.
+- **True:** row sizes are in `core/rows.ts` (ADR 0001's corrections moved them
+  there), and they size rows that exist (`rowsBytes`), not a schema. kostka's join
+  rule compares row counts only (`engines/kostka/physical/planner.ts`, `strategy`).
+- **So:** `core/rows.ts` gets `fieldsBytes(fields)`: `ROW_OVERHEAD` plus a width per
+  column type (8 for numbers, dates and timestamps, 1 for a bool, 16 for a string:
+  4 plus an assumed 12 characters). Measured on the examples, this gives the mix the
+  ADR describes: "revenue per city" builds about 63 KB (shuffled), "orders from one
+  city" about 7 KB (broadcast), every taxi join broadcasts, SSB Q4.1 has both kinds,
+  and 7 of the 13 TPC-DS queries have a shuffle join.
+
+- **Assumed:** writing and reading shuffle files are "storage segments", and the
+  cluster's memory can hold them.
+- **True:** `storage` is shared table storage (`cluster/node.ts`); a node's local
+  disk is the `spill_write` and `spill_read` segments. `MemoryPool.hold`
+  (`cluster/memory.ts`) keeps a block in memory until memory runs short; it has no
+  way to put a block on disk at once.
+- **So:** a shuffle file is written to the node's local disk (a `spill_write`
+  segment) and read from it (`spill_read`), plus network time from another node.
+  `MemoryPool` gets `holdOnDisk`, which puts a block straight on the disk (and fails
+  with `OutOfDiskError` if it doesn't fit). The Spark views call these "disk write"
+  and "disk read".
+
+- **Assumed:** the kernels both engines need are inside kostka's operators.
+- **True:** the batch is `engines/kostka/physical/batch.ts`, outside `operators/`.
+  kostka's coordinator also has `History<T>` (a value step by step,
+  `coordinator/state.ts`), which the Spark driver needs too.
+- **So:** `batch.ts` moves to `core/` as planned, and `History<T>` moves to
+  `core/history.ts`: a second use. kostka's behaviour does not change.
+
+- **Assumed (exit criterion 6):** when a stopped node held shuffle files a later
+  stage needed, the steps show FetchFailed and a resubmitted stage.
+- **True:** in Spark, `ExecutorLost` unregisters the node's map outputs at once. A
+  stage that has not started yet sees its parent's missing outputs when it is
+  submitted, and the parent is resubmitted first: no task fails a fetch. FetchFailed
+  happens only to tasks of a stage that is already running.
+- **So:** the driver does what Spark does. Agreed with the user, criterion 6 now
+  reads: "Stopping a node at each of 20 evenly spaced steps (3 nodes) gives the same
+  rows as with no failure. When a stopped node held shuffle files a later stage
+  needed, the steps show a resubmitted stage with attempt 1, and FetchFailed when a
+  stage reading those files was already running. Checked by: a recovery test on SSB
+  Q2.1 and the sample's "revenue per city"."

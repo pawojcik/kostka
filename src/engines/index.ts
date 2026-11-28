@@ -4,5 +4,6 @@
 
 import { Engines } from "../execution/registry.ts";
 import { kostka } from "./kostka/engine.ts";
+import { spark } from "./spark/engine.ts";
 
-export const ENGINES = new Engines([kostka]);
+export const ENGINES = new Engines([kostka, spark]);

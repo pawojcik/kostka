@@ -13,40 +13,15 @@
 
 import { compileExpr, type Evaluator } from "../../../../core/compile.ts";
 import type { AggCall, Expr, Field } from "../../../../core/expr.ts";
-import type { BoundAggregate } from "../../../../core/functions/index.ts";
+import { AggLayout, type Group } from "../../../../core/accumulators.ts";
 import { partitionOf } from "../../../../core/hash.ts";
 import { tupleKey, type Row, type Value } from "../../../../core/types.ts";
-import { Batch, checkColumns } from "../batch.ts";
+import { Batch, checkColumns } from "../../../../core/batch.ts";
 import type { Charged, ExecContext } from "../context.ts";
 import { COST } from "../../../../core/cost.ts";
 import type { BufferSplit, OutputBuffer } from "../buffer.ts";
 import { ENTRY_OVERHEAD, rowsBytes } from "../../../../core/rows.ts";
 import { Sink, Source, type OperatorInstance, type SourceInput, type SourceInstance } from "../operator.ts";
-
-interface Group {
-  key: Value[];
-  states: Value[][];
-}
-
-/** The aggregate implementations and where each one's state sits in a partial row. */
-export class AggLayout {
-  readonly impls: BoundAggregate[];
-  readonly offsets: number[];
-  readonly width: number;
-  constructor(calls: readonly AggCall[]) {
-    this.impls = calls.map((c) => c.bound);
-    this.offsets = [];
-    let o = 0;
-    for (const impl of this.impls) {
-      this.offsets.push(o);
-      o += impl.state.length;
-    }
-    this.width = o;
-  }
-  init(): Value[][] {
-    return this.impls.map((i) => i.init());
-  }
-}
 
 export class PartialAggregateSink extends Sink {
   readonly buffer: OutputBuffer;
@@ -96,15 +71,11 @@ export class PartialAggregateSink extends Sink {
             g = { key: kv, states: this.layout.init() };
             groups.set(ck, g);
           }
-          for (let i = 0; i < impls.length; i++) {
-            const a = args[i];
-            const v = a ? a(row) : true;
-            if (v !== null) impls[i]!.add(g.states[i]!, v);
-          }
+          this.layout.add(g.states, args, row);
         }
         ctx.cpu(batch.rows.length * (COST.hashProbe + impls.length * COST.aggUpdate), me);
         if (!perGroup && groups.size) {
-          const s = [...groups.values()].slice(0, 16).map((g) => [...g.key, ...g.states.flat()]);
+          const s = [...groups.values()].slice(0, 16).map((g) => this.layout.partial(g));
           perGroup = rowsBytes(s) / s.length;
         }
         ctx.grow(holdKey, Math.round(groups.size * (perGroup + ENTRY_OVERHEAD)), me);
@@ -113,11 +84,11 @@ export class PartialAggregateSink extends Sink {
       finish: (ctx) => {
         const n = this.buffer.n;
         const parts: Row[][] = Array.from({ length: n }, () => []);
-        for (const g of groups.values()) parts[partitionOf(g.key, n)]!.push([...g.key, ...g.states.flat()]);
+        for (const g of groups.values()) parts[partitionOf(g.key, n)]!.push(this.layout.partial(g));
         ctx.cpu(groups.size * COST.partition, me);
         parts.forEach((rows, p) => rows.length && ctx.store(this.buffer, p, rows, me));
         groupsSent += groups.size;
-        if (!sample.length) sample = [...groups.values()].slice(0, 20).map((g) => [...g.key, ...g.states.map((st, i) => impls[i]!.result(st))]);
+        if (!sample.length) sample = [...groups.values()].slice(0, 20).map((g) => this.layout.result(g));
         if (groups.size) ctx.note(me, `${groups.size.toLocaleString("en")} group(s) written to ${parts.filter((x) => x.length).length} partition(s)`);
         groups.clear();
         if (holdKey) ctx.release(holdKey);
@@ -161,7 +132,7 @@ export class MergeAggregateSource extends Source {
     let pos = 0;
     let holdKey: string | null = null;
     const k = this.nKeys;
-    const { impls, offsets } = this.layout;
+    const { impls } = this.layout;
     let groupsOut = 0, partialsMerged = 0;
     const sample: Row[] = [];
     return {
@@ -182,10 +153,7 @@ export class MergeAggregateSource extends Source {
               g = { key: kv, states: this.layout.init() };
               groups.set(ck, g);
             }
-            for (let a = 0; a < impls.length; a++) {
-              const o = k + offsets[a]!;
-              impls[a]!.merge(g.states[a]!, row.slice(o, o + impls[a]!.state.length));
-            }
+            this.layout.merge(g.states, row, k);
           }
           merged += part.length;
           if (!perGroup && part.length) perGroup = rowsBytes(part.slice(0, 16)) / Math.min(16, part.length);
@@ -193,7 +161,7 @@ export class MergeAggregateSource extends Source {
           ctx.grow(holdKey, Math.round(groups.size * (perGroup + ENTRY_OVERHEAD)), me);
         }
         if (!k && !groups.size && s.partition === 0) groups.set(0, { key: [], states: this.layout.init() });
-        rows = [...groups.values()].map((g) => [...g.key, ...g.states.map((st, a) => impls[a]!.result(st))]);
+        rows = [...groups.values()].map((g) => this.layout.result(g));
         pos = 0;
         partialsMerged += merged;
         groupsOut += rows.length;

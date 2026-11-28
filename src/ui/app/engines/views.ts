@@ -27,6 +27,8 @@ export interface UnitGroup {
 }
 
 export interface EngineViews {
+  /** Who decides, as the views call it ("coordinator", "driver"). */
+  readonly schedulerNoun: string;
   /** What runs on a node, as the views call it ("worker"), and its short name ("W1"). */
   readonly nodeNoun: string;
   nodeName(node: number): string;
@@ -41,6 +43,15 @@ export interface EngineViews {
   running(state: Json): string;
   /** What the Steps view says about the engine's steps and messages. */
   readonly stepsNote: VNode;
+  /** How the engine runs each kind of plan node, after what the node is ("One split
+   * per data file."), for the plan view. */
+  readonly nodeHelp: Readonly<Record<string, string>>;
+  /** The engine's operators that run plan node `node`: a label, and going to it. */
+  nodeOps(state: Json, node: number): { label: string; go: (q: Query) => void }[];
+  /** The rows plan node `node` produced so far, or null if nothing ran yet. */
+  nodeRows(state: Json, node: number): number | null;
+  /** What the controls do, in the engine's words: the note under them. */
+  readonly controlsNote: VNode;
   /** Tabs of the engine's own objects, shown after Plan. */
   readonly tabs: readonly { readonly key: SubTab; readonly label: string; view(p: { q: Query; state: Json }): VNode }[];
 }

@@ -26,7 +26,8 @@ import { RuntimeFilterOp } from "../physical/operators/streaming.ts";
 import { MAX_PLAN_ROWS, type LargestNode, type PhysicalPlan, type Pipeline } from "../physical/pipeline.ts";
 import type { Assigned, Command, CoordinatorEvent, WholeInputPieces, WorkerEvent } from "../protocol.ts";
 import type { Row } from "../../../core/types.ts";
-import { addReport, History, OutputState, QueryState, SplitState, type PipelineState } from "./state.ts";
+import { History } from "../../../core/history.ts";
+import { addReport, OutputState, QueryState, SplitState, type PipelineState } from "./state.ts";
 
 /** What a step of the history is about. */
 export type StepKind =

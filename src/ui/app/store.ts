@@ -6,12 +6,17 @@ import type { Catalog } from "../editor.ts";
 export type Json = any;
 
 export interface QueryOptions {
+  /** The engine to run on, by name. */
+  engine: string;
   rules: string[];
-  cluster: { nodes: number; memoryMB: number; diskMB: number; io: string; batchRows: number; splitRows: number; cpu: "measured" | "model" };
+  cluster: { nodes: number; cores: number; memoryMB: number; diskMB: number; io: string; batchRows: number; splitRows: number; cpu: "measured" | "model" };
+  /** kostka's settings. */
   planner: { shufflePartitions: number | "auto"; joinStrategy: "auto" | "broadcast" | "shuffle"; runtimeFilters: boolean };
+  /** The Spark-style engine's settings. */
+  spark: { broadcastThreshold: number; shufflePartitions: number | "auto"; maxTaskFailures: number };
 }
 
-export type SubTab = "plan" | "program" | "events" | "state" | "workers" | "trace" | "result";
+export type SubTab = "plan" | "program" | "events" | "state" | "workers" | "trace" | "result" | "spark-plan" | "spark-jobs" | "spark-executors";
 
 export interface Query {
   key: string;
@@ -35,7 +40,7 @@ export interface Query {
   sub: SubTab;
   /** The plan stage shown (0: analyzed, then one per rule); null: the optimized plan. */
   planStep: number | null;
-  sel: { kind: "op" | "pipe" | "worker" | "buffer" | "node" | "split"; id: string | number } | null;
+  sel: { kind: "op" | "pipe" | "worker" | "buffer" | "node" | "split" | "stage" | "task" | "sop"; id: string | number } | null;
   error: string | null;
   progress: { phase?: string; done?: number; total?: number } | null;
 }
@@ -102,9 +107,11 @@ export function toast(msg: string): void {
 export function defaultOptions(info: Json): QueryOptions {
   const d = info.cluster.defaults;
   return {
+    engine: info.engines[0]?.name ?? "kostka",
     rules: info.rules.map((r: Json) => r.name),
-    cluster: { nodes: 2, memoryMB: d.memoryMB, diskMB: d.diskMB, io: d.io, batchRows: d.batchRows, splitRows: d.splitRows, cpu: d.cpu },
+    cluster: { nodes: 2, cores: d.cores, memoryMB: d.memoryMB, diskMB: d.diskMB, io: d.io, batchRows: d.batchRows, splitRows: d.splitRows, cpu: d.cpu },
     planner: { shufflePartitions: "auto", joinStrategy: "auto", runtimeFilters: true },
+    spark: { broadcastThreshold: 32 * 1024, shufflePartitions: "auto", maxTaskFailures: 4 },
   };
 }
 

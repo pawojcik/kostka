@@ -85,3 +85,24 @@ describe("MemoryPool", () => {
     assert.deepEqual(structuredClone(st), st);
   });
 });
+
+describe("memory: a block straight to disk", () => {
+  test("holdOnDisk puts a block on the disk, charges the write, and is not a spill", () => {
+    const written: number[] = [];
+    const run = { spillWrite: (b: number) => written.push(b) };
+    const pool = new MemoryPool("N0", 100, 1000);
+    const blocks = new BlockStore(0);
+    const block = blocks.put([[1, "abc"], [2, "def"]]);
+    pool.holdOnDisk(run, "shuffle:0", "shuffle", "shuffle file", block);
+    assert.equal(block.spilled, true);
+    assert.deepEqual(written, [block.bytes]);
+    const st = pool.state();
+    assert.equal(st.memory.used, 0);
+    assert.equal(st.disk.used, block.bytes);
+    assert.equal(st.spills, 0);
+    pool.release("shuffle:0");
+    assert.equal(pool.state().disk.used, 0);
+    const big = blocks.put(Array.from({ length: 100 }, (_, i) => [i, "x".repeat(20)]));
+    assert.throws(() => pool.holdOnDisk(run, "shuffle:1", "shuffle", "shuffle file", big), (e: Error) => e instanceof OutOfDiskError && /ran out of disk/.test(e.message));
+  });
+});

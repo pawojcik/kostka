@@ -7,6 +7,8 @@ import { S, update, type Json, type Query } from "./store.ts";
 import { ms, n } from "./format.ts";
 import { viewsOf } from "./engines/index.ts";
 
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 /** The engine's kinds of step (Session.info: who takes them, how they are named). */
 function kindsOf(engine: string): Json[] {
   return S.info?.engines.find((e: Json) => e.name === engine)?.steps ?? [];
@@ -71,8 +73,8 @@ export function EventsView({ q, state, go }: { q: Query; state: Json; go: (at: n
         ))}
         <span class="grow" />
         <button class="btn small" onClick={() => { q.hidden = new Set(); update(); }}>All</button>
-        <button class="btn small" onClick={() => only("scheduler")}>Coordinator</button>
-        <button class="btn small" onClick={() => only("node")}>Workers</button>
+        <button class="btn small" onClick={() => only("scheduler")}>{cap(v.schedulerNoun)}</button>
+        <button class="btn small" onClick={() => only("node")}>{cap(v.nodeNoun)}s</button>
       </div>
       <ul class="evlist">
         {shown.slice(start, start + LIMIT).map((e) => (
@@ -81,7 +83,7 @@ export function EventsView({ q, state, go }: { q: Query; state: Json; go: (at: n
               <span class="mono faint">#{e.seq}</span>
               <span class="mono faint">{ms(e.ms).padStart(9)}</span>
               <KindChip engine={state.engine} kind={e.kind} />
-              {e.node !== null && kinds.find((k) => k.kind === e.kind)?.by === "node" ? <span class={`wtag wk-${e.node % 8}`}>{v.nodeName(e.node)}</span> : <span class="wtag coord">coord</span>}
+              {e.node !== null && kinds.find((k) => k.kind === e.kind)?.by === "node" ? <span class={`wtag wk-${e.node % 8}`}>{v.nodeName(e.node)}</span> : <span class="wtag coord">{v.schedulerNoun === "coordinator" ? "coord" : v.schedulerNoun}</span>}
               <span class="grow">{e.text}</span>
               <span class="faint">{e.messages.length ? `${n(e.messages.length)} msg` : ""}</span>
             </div>
