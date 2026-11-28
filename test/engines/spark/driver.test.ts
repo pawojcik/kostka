@@ -1,12 +1,12 @@
 // The Spark-style driver, with no simulation (ADR 0002): the TaskScheduler (slots,
-// most free slots first, retries), the MapOutputTracker (locations, lost and removed
+// most free slots first, retries), a TaskRecord (it ends once), the MapOutputTracker (locations, lost and removed
 // outputs) and the DAGScheduler fed events by hand: stages as barriers, FetchFailed
 // and the parent stage resubmitted for its missing partitions only, a task that fails
 // maxTaskFailures times, a stage tried maxStageAttempts times, and every executor lost.
 import assert from "node:assert/strict";
 import { before, describe, test } from "node:test";
 import type { Database } from "../../../src/api/database.ts";
-import { DAGScheduler, type Decision } from "../../../src/engines/spark/driver/dag-scheduler.ts";
+import { DAGScheduler, TaskRecord, type Decision } from "../../../src/engines/spark/driver/dag-scheduler.ts";
 import { MapOutputTracker } from "../../../src/engines/spark/driver/map-output-tracker.ts";
 import { TaskScheduler } from "../../../src/engines/spark/driver/task-scheduler.ts";
 import { planSpark } from "../../../src/engines/spark/physical/planner.ts";
@@ -57,6 +57,20 @@ describe("TaskScheduler", () => {
     assert.deepEqual(ts.offer(), [], "executor 0 is busy");
     ts.finished(0);
     assert.deepEqual(ts.offer().map((x) => [x.executor, x.partition, x.attempt]), [[0, 1, 1]]);
+  });
+});
+
+describe("TaskRecord", () => {
+  test("a task ends once", () => {
+    const t = new TaskRecord({ tid: 3, executor: 0, slot: 1, stage: 2, stageAttempt: 0, partition: 4, attempt: 0 }, 5, 0);
+    const running = t.outcome;
+    assert.equal(running, null, "no outcome while it runs");
+    assert.equal(t.status.now, "running");
+    t.ended(6, "failed", { end: 9, error: "OutOfMemoryError: too big", fetchFailed: false, metrics: null });
+    assert.equal(t.status.after(5), "running", "running in the step it was launched");
+    assert.equal(t.status.after(6), "failed");
+    assert.equal(t.outcome?.error, "OutOfMemoryError: too big");
+    assert.throws(() => t.ended(7, "lost", { end: 10, error: "gone", fetchFailed: false, metrics: null }), /task 4\.0 in stage 2\.0 \(TID 3\) ended twice/);
   });
 });
 

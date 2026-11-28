@@ -4,6 +4,8 @@
 //   BroadcastHashJoin; SSB Q4.1 at scale 0.1 has both;
 // - the operators each plan node becomes: a Sort, a TopN, a Limit and a join without
 //   keys, and no Exchange where the input is in one partition already;
+// - each operator is numbered once and given its plan node once, and a SparkPlan
+//   rejects one that is not;
 // - criterion 3: one stage per Exchange plus one result stage per job, one job per
 //   BroadcastExchange plus one, and each stage's task count (SSB Q2.1, TPC-DS q65).
 import assert from "node:assert/strict";
@@ -16,6 +18,9 @@ import { BroadcastExchange, ShuffleExchange } from "../../../src/engines/spark/p
 import { BroadcastHashJoinExec, SortMergeJoinExec } from "../../../src/engines/spark/physical/operators/join.ts";
 import { SortExec } from "../../../src/engines/spark/physical/operators/sort.ts";
 import { walk, type SparkOp } from "../../../src/engines/spark/physical/plan.ts";
+import { FileScan } from "../../../src/engines/spark/physical/operators/scan.ts";
+import { SparkPlan } from "../../../src/engines/spark/physical/planner.ts";
+import { Scan } from "../../../src/sql/plan.ts";
 import { sparkSettings } from "../../../src/engines/spark/engine.ts";
 import { QUERIES as SSB } from "../../../src/loaders/ssb/queries.ts";
 import { QUERIES as TPCDS } from "../../../src/loaders/tpcds/queries.ts";
@@ -116,6 +121,35 @@ describe("the Spark-style planner: operators", () => {
     assert.deepEqual(shape("select * from (select * from orders order by amount) x limit 3").slice(0, 4), ["GlobalLimit", "  Project", "    Sort", "      Exchange single"]);
     // A final aggregate without keys is one partition too.
     assert.deepEqual(shape("select count(*) from orders limit 1"), ["GlobalLimit", "  Project", "    HashAggregate", "      Exchange single", "        HashAggregate partial", "          FileScan"]);
+  });
+});
+
+describe("the Spark-style plan: each operator numbered once, with its plan node", () => {
+  let db: Database;
+  before(async () => {
+    db = openDatabase();
+    await db.loadSample();
+  });
+
+  test("an operator is numbered once and given its plan node once", () => {
+    const op = spark(db, "select id from orders").plan.root;
+    assert.throws(() => op.place({ id: 7 }), /is numbered twice/);
+    const node = op.planNode;
+    assert.ok(node);
+    assert.throws(() => op.place({ node }), /is given its plan node twice/);
+  });
+
+  test("a SparkPlan rejects an operator with the wrong number or no plan node", () => {
+    const plan = spark(db, "select id from orders").plan;
+    const scan = plan.ops.find((o): o is FileScan => o instanceof FileScan);
+    assert.ok(scan && scan.planNode instanceof Scan);
+    const settings = plan.settings;
+    // a new operator over a numbered plan: it is not numbered, and its child's number is not 1
+    assert.throws(() => new SparkPlan(new ShuffleExchange(plan.root, { kind: "single" }, 0), [], [], [], settings), /is operator 0 of the plan but has number -1/);
+    // numbered, but never told which plan node it implements
+    const bare = new FileScan(scan.planNode, db.reader);
+    bare.place({ id: 0 });
+    assert.throws(() => new SparkPlan(bare, [], [], [], settings), /FileScan \(#0\) implements no plan node/);
   });
 });
 
